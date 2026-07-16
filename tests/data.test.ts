@@ -5,6 +5,7 @@ import {
   deleteColumn,
   deleteRow,
   duplicateRow,
+  hasContent,
   insertColumn,
   insertRow,
   invertDiff,
@@ -142,5 +143,26 @@ describe('applyDiff / invertDiff', () => {
       const roundTripped = applyDiff(data, invertDiff(diff));
       expect(roundTripped).toEqual(original);
     }
+  });
+});
+
+describe('hasContent', () => {
+  it('is false for a blank starter document', () => {
+    const blank = createDataModel(['A', 'B', 'C'], [['', '', '']], 'Untitled_1.csv');
+    expect(hasContent(blank)).toBe(false);
+  });
+
+  it('is false when rows contain only whitespace', () => {
+    const whitespaceOnly = createDataModel(['A', 'B'], [['  ', '\t']], 'test.csv');
+    expect(hasContent(whitespaceOnly)).toBe(false);
+  });
+
+  it('ignores header text and only looks at cell values', () => {
+    const renamedOnly = createDataModel(['Name', 'Age'], [['', '']], 'test.csv');
+    expect(hasContent(renamedOnly)).toBe(false);
+  });
+
+  it('is true as soon as any cell has non-whitespace content', () => {
+    expect(hasContent(sample())).toBe(true);
   });
 });

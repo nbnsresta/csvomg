@@ -19,6 +19,9 @@ export interface FileSystemAdapter {
   readonly supportsDirectSave: boolean;
   openFiles(multiple?: boolean): Promise<OpenedFile[]>;
   saveToHandle(handle: FileHandle, text: string): Promise<void>;
-  /** Prompts for a save location. Returns a new handle when the adapter supports direct save, else null. */
-  saveFileAs(text: string, suggestedName: string): Promise<FileHandle | null>;
+  /**
+   * Prompts for a save location. Returns the new handle and the name the user actually chose
+   * (which may differ from suggestedName) when the adapter supports direct save, else null.
+   */
+  saveFileAs(text: string, suggestedName: string): Promise<{ handle: FileHandle; name: string } | null>;
 }

@@ -4,6 +4,7 @@ import {
   deleteColumn,
   deleteRow,
   duplicateRow,
+  hasContent,
   insertColumn,
   insertRow,
   renameColumn,
@@ -11,13 +12,13 @@ import {
   setCell,
 } from './core/data.ts';
 import { parseCSV, parseJSON, serializeCSV, serializeJSON } from './core/parser.ts';
+import { deleteDraft, loadDraft, saveDraft } from './io/drafts.ts';
+import { clearSession, loadSession, saveSession, type SessionState } from './io/session.ts';
 import { openDroppedFile, webFileSystemAdapter } from './io/web-fs.ts';
 import type { FileHandle, OpenedFile } from './io/types.ts';
 import { showContextMenu, type ContextMenuItem } from './ui/context-menu.ts';
 import { Grid, type ContextMenuTarget } from './ui/grid.ts';
-import type { DataModel, Selection } from './types/index.ts';
-
-type FileType = 'csv' | 'json';
+import type { DataModel, FileType, Selection } from './types/index.ts';
 
 const emptyState = document.getElementById('empty-state') as HTMLDivElement;
 const gridContainer = document.getElementById('grid-container') as HTMLDivElement;
@@ -26,16 +27,71 @@ const btnNewFile = document.getElementById('btn-new-file') as HTMLButtonElement;
 const dropZone = document.querySelector('.drop-zone') as HTMLDivElement;
 const statusSelection = document.getElementById('status-selection') as HTMLDivElement;
 const statusCounts = document.getElementById('status-counts') as HTMLDivElement;
+const btnToolbarNew = document.getElementById('btn-toolbar-new') as HTMLButtonElement;
+const btnToolbarOpen = document.getElementById('btn-toolbar-open') as HTMLButtonElement;
+const btnToolbarSave = document.getElementById('btn-toolbar-save') as HTMLButtonElement;
+const tabBar = document.getElementById('tab-bar') as HTMLElement;
 
 // The only place a venue-specific FileSystemAdapter is chosen. Swapping venues (extension,
 // future VS Code host) means swapping this one line — nothing below here should import
 // web-fs.ts or DOM file-picker types directly.
 const fs = webFileSystemAdapter;
 
-let currentData: DataModel | null = null;
-let currentHandle: FileHandle | null = null;
-let currentFileType: FileType = 'csv';
-let dirty = false;
+interface DocTab {
+  id: string;
+  data: DataModel;
+  handle: FileHandle | null;
+  fileType: FileType;
+  dirty: boolean;
+}
+
+const MAX_TABS = 10;
+let tabs: DocTab[] = [];
+let activeTabId: string | null = null;
+
+function getActiveTab(): DocTab | null {
+  return tabs.find((t) => t.id === activeTabId) ?? null;
+}
+
+function canOpenNewTab(): boolean {
+  if (tabs.length >= MAX_TABS) {
+    alert(`You have ${MAX_TABS} documents open — close one before opening another.`);
+    return false;
+  }
+  return true;
+}
+
+let untitledCounter = 1;
+function nextUntitledName(): string {
+  return `Untitled_${untitledCounter++}.csv`;
+}
+
+/** Seeds the counter past any restored Untitled_N.csv tabs so a new one never collides. */
+function seedUntitledCounter(): void {
+  const nums = tabs
+    .map((t) => /^Untitled_(\d+)\.csv$/.exec(t.data.meta.filename)?.[1])
+    .filter((n): n is string => n !== undefined)
+    .map(Number);
+  untitledCounter = nums.length > 0 ? Math.max(...nums) + 1 : 1;
+}
+
+function persistSession(): void {
+  if (tabs.length === 0) {
+    void clearSession().catch((err) => console.error('session clear failed', err));
+    return;
+  }
+  const state: SessionState = {
+    tabs: tabs.map((t) => ({
+      id: t.id,
+      kind: t.handle ? 'file' : 'draft',
+      handle: t.handle,
+      filename: t.data.meta.filename,
+      fileType: t.fileType,
+    })),
+    activeTabId,
+  };
+  void saveSession(state).catch((err) => console.error('session save failed', err));
+}
 
 const grid = new Grid(gridContainer, {
   onCellEdit: handleCellEdit,
@@ -57,11 +113,10 @@ function parseOpenedFile(opened: OpenedFile): { data: DataModel; type: FileType 
   return { data: createDataModel(headers, rows, opened.name, delimiter), type };
 }
 
-function serializeCurrent(): string {
-  if (!currentData) return '';
-  return currentFileType === 'json'
-    ? serializeJSON(currentData.headers, currentData.rows)
-    : serializeCSV(currentData.headers, currentData.rows, currentData.meta.delimiter);
+function serializeTab(tab: DocTab): string {
+  return tab.fileType === 'json'
+    ? serializeJSON(tab.data.headers, tab.data.rows)
+    : serializeCSV(tab.data.headers, tab.data.rows, tab.data.meta.delimiter);
 }
 
 function showGrid(): void {
@@ -71,7 +126,81 @@ function showGrid(): void {
   grid.focus();
 }
 
+function showEmptyState(): void {
+  gridContainer.classList.add('hidden');
+  emptyState.classList.remove('hidden');
+}
+
+function activateTab(id: string): void {
+  activeTabId = id;
+  const tab = getActiveTab();
+  if (!tab) return;
+  grid.setData(tab.data);
+  showGrid();
+  updateStatus();
+}
+
+function closeTab(id: string): void {
+  const tab = tabs.find((t) => t.id === id);
+  if (!tab) return;
+  if (tab.dirty && hasContent(tab.data) && !confirm(`Discard unsaved changes to "${tab.data.meta.filename}"?`)) {
+    return;
+  }
+
+  const index = tabs.indexOf(tab);
+  tabs = tabs.filter((t) => t.id !== id);
+  void deleteDraft(id).catch((err) => console.error('draft cleanup failed', err));
+
+  if (activeTabId !== id) {
+    updateStatus();
+    return;
+  }
+  const next = tabs[index] ?? tabs[index - 1];
+  if (next) {
+    activateTab(next.id);
+  } else {
+    activeTabId = null;
+    showEmptyState();
+    updateStatus();
+  }
+}
+
+function renderTabs(): void {
+  tabBar.replaceChildren(
+    ...tabs.map((tab) => {
+      const el = document.createElement('div');
+      el.className = tab.id === activeTabId ? 'tab tab-active' : 'tab';
+      el.addEventListener('click', () => activateTab(tab.id));
+
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'tab-name';
+      nameSpan.textContent = tab.data.meta.filename;
+      el.appendChild(nameSpan);
+
+      if (tab.dirty) {
+        const dot = document.createElement('span');
+        dot.className = 'tab-dirty-dot';
+        dot.title = 'Unsaved changes';
+        el.appendChild(dot);
+      }
+
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'tab-close';
+      closeBtn.textContent = '×';
+      closeBtn.setAttribute('aria-label', `Close ${tab.data.meta.filename}`);
+      closeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeTab(tab.id);
+      });
+      el.appendChild(closeBtn);
+
+      return el;
+    }),
+  );
+}
+
 function loadFile(opened: OpenedFile): void {
+  if (!canOpenNewTab()) return;
   let parsed: { data: DataModel; type: FileType };
   try {
     parsed = parseOpenedFile(opened);
@@ -79,49 +208,61 @@ function loadFile(opened: OpenedFile): void {
     alert(`Failed to open "${opened.name}": ${err instanceof Error ? err.message : String(err)}`);
     return;
   }
-  currentData = parsed.data;
-  currentFileType = parsed.type;
-  currentHandle = opened.handle;
-  dirty = false;
-  grid.setData(currentData);
-  showGrid();
-  updateStatus();
+  const tab: DocTab = {
+    id: crypto.randomUUID(),
+    data: parsed.data,
+    handle: opened.handle,
+    fileType: parsed.type,
+    dirty: false,
+  };
+  tabs.push(tab);
+  activateTab(tab.id);
 }
 
 function newFile(): void {
-  if (dirty && !confirm('Discard unsaved changes?')) return;
-  currentData = createDataModel(['A', 'B', 'C'], [['', '', '']], 'Untitled.csv', ',');
-  currentFileType = 'csv';
-  currentHandle = null;
-  dirty = false;
-  grid.setData(currentData);
-  showGrid();
-  updateStatus();
+  if (!canOpenNewTab()) return;
+  const tab: DocTab = {
+    id: crypto.randomUUID(),
+    data: createDataModel(['A', 'B', 'C'], [['', '', '']], nextUntitledName(), ','),
+    handle: null,
+    fileType: 'csv',
+    dirty: true,
+  };
+  tabs.push(tab);
+  activateTab(tab.id);
+  void saveDraft(tab.id, tab.data, tab.fileType).catch((err) => console.error('draft autosave failed', err));
 }
 
 /** Commits a new DataModel from any mutation (cell edit, row/column action, paste, clear, ...). */
 function commitMutation(data: DataModel): void {
-  currentData = data;
-  dirty = true;
-  grid.setData(currentData);
+  const tab = getActiveTab();
+  if (!tab) return;
+  tab.data = data;
+  tab.dirty = true;
+  grid.setData(tab.data);
   updateStatus();
+  if (!tab.handle) {
+    void saveDraft(tab.id, tab.data, tab.fileType).catch((err) => console.error('draft autosave failed', err));
+  }
 }
 
 function handleCellEdit(row: number, col: number, value: string): void {
-  if (!currentData) return;
-  if ((currentData.rows[row]?.[col] ?? '') === value) return;
-  commitMutation(setCell(currentData, row, col, value).data);
+  const tab = getActiveTab();
+  if (!tab) return;
+  if ((tab.data.rows[row]?.[col] ?? '') === value) return;
+  commitMutation(setCell(tab.data, row, col, value).data);
 }
 
 function clearSelectedCells(): void {
-  if (!currentData) return;
+  const tab = getActiveTab();
+  if (!tab) return;
   const sel = grid.getSelection();
   if (!sel) return;
   const minRow = Math.min(sel.startRow, sel.endRow);
   const maxRow = Math.max(sel.startRow, sel.endRow);
   const minCol = Math.min(sel.startCol, sel.endCol);
   const maxCol = Math.max(sel.startCol, sel.endCol);
-  let data = currentData;
+  let data = tab.data;
   for (let r = minRow; r <= maxRow; r++) {
     for (let c = minCol; c <= maxCol; c++) {
       data = setCell(data, r, c, '').data;
@@ -147,8 +288,9 @@ function withFocus(items: ContextMenuItem[]): ContextMenuItem[] {
 }
 
 function handleContextMenu(target: ContextMenuTarget): void {
-  if (!currentData) return;
-  const data = currentData;
+  const tab = getActiveTab();
+  if (!tab) return;
+  const data = tab.data;
 
   if (target.zone === 'row') {
     const items: ContextMenuItem[] = [
@@ -221,12 +363,13 @@ async function openFileDialog(): Promise<void> {
 }
 
 async function save(): Promise<void> {
-  if (!currentData) return;
-  const text = serializeCurrent();
-  if (currentHandle) {
+  const tab = getActiveTab();
+  if (!tab) return;
+  const text = serializeTab(tab);
+  if (tab.handle) {
     try {
-      await fs.saveToHandle(currentHandle, text);
-      dirty = false;
+      await fs.saveToHandle(tab.handle, text);
+      tab.dirty = false;
       updateStatus();
       return;
     } catch {
@@ -237,16 +380,19 @@ async function save(): Promise<void> {
 }
 
 async function saveAs(): Promise<void> {
-  if (!currentData) return;
-  const text = serializeCurrent();
-  const handle = await fs.saveFileAs(text, currentData.meta.filename);
-  if (handle) {
-    currentHandle = handle;
-    dirty = false;
+  const tab = getActiveTab();
+  if (!tab) return;
+  const text = serializeTab(tab);
+  const result = await fs.saveFileAs(text, tab.data.meta.filename);
+  if (result) {
+    tab.handle = result.handle;
+    tab.data = { ...tab.data, meta: { ...tab.data.meta, filename: result.name } };
+    tab.dirty = false;
+    void deleteDraft(tab.id).catch((err) => console.error('draft cleanup failed', err));
     updateStatus();
   } else if (!fs.supportsDirectSave) {
     // Fallback path triggers a download immediately; treat as saved.
-    dirty = false;
+    tab.dirty = false;
     updateStatus();
   }
 }
@@ -267,19 +413,29 @@ function updateSelectionStatus(sel: Selection | null): void {
 }
 
 function updateStatus(): void {
-  if (!currentData) {
+  const tab = getActiveTab();
+  btnToolbarSave.disabled = !tab;
+
+  if (!tab) {
     statusCounts.textContent = '';
     document.title = 'csvomg';
+    renderTabs();
+    persistSession();
     return;
   }
-  const rows = currentData.rows.length;
-  const cols = currentData.headers.length;
+  const rows = tab.data.rows.length;
+  const cols = tab.data.headers.length;
   statusCounts.textContent = `${rows} row${rows === 1 ? '' : 's'} · ${cols} col${cols === 1 ? '' : 's'}`;
-  document.title = `${dirty ? '● ' : ''}${currentData.meta.filename} — csvomg`;
+  document.title = `${tab.dirty ? '● ' : ''}${tab.data.meta.filename} — csvomg`;
+  renderTabs();
+  persistSession();
 }
 
 btnOpenFile.addEventListener('click', () => void openFileDialog());
 btnNewFile.addEventListener('click', newFile);
+btnToolbarOpen.addEventListener('click', () => void openFileDialog());
+btnToolbarNew.addEventListener('click', newFile);
+btnToolbarSave.addEventListener('click', () => void save());
 
 dropZone.addEventListener('dragover', (e) => {
   e.preventDefault();
@@ -316,8 +472,40 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
-window.addEventListener('beforeunload', (e) => {
-  if (!dirty) return;
-  e.preventDefault();
-  e.returnValue = '';
-});
+async function restoreSession(): Promise<void> {
+  const session = await loadSession().catch(() => null);
+  if (!session || session.tabs.length === 0) return;
+
+  for (const ref of session.tabs) {
+    if (ref.kind === 'draft') {
+      const draft = await loadDraft(ref.id).catch(() => null);
+      if (!draft) continue;
+      const data = createDataModel(draft.headers, draft.rows, draft.filename, draft.delimiter);
+      if (!hasContent(data)) continue;
+      tabs.push({ id: ref.id, data, handle: null, fileType: draft.fileType, dirty: true });
+      continue;
+    }
+
+    // kind === 'file': re-read live from disk. queryPermission doesn't need a user gesture
+    // (unlike requestPermission), so this can safely run unattended at boot. A denied/unknown
+    // permission, or a moved/deleted file, just drops that tab from the restored set.
+    try {
+      const handle = ref.handle as FileSystemFileHandle;
+      const permission = await handle.queryPermission({ mode: 'read' });
+      if (permission !== 'granted') continue;
+      const file = await handle.getFile();
+      const opened: OpenedFile = { name: file.name, text: await file.text(), handle };
+      const parsed = parseOpenedFile(opened);
+      tabs.push({ id: ref.id, data: parsed.data, handle, fileType: parsed.type, dirty: false });
+    } catch {
+      continue;
+    }
+  }
+
+  if (tabs.length === 0) return;
+  seedUntitledCounter();
+  const restoredActive = tabs.find((t) => t.id === session.activeTabId) ?? tabs[0];
+  activateTab(restoredActive.id);
+}
+
+void restoreSession();

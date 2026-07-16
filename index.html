@@ -15,7 +15,14 @@
   </head>
   <body>
     <!-- App Shell -->
-    <header id="toolbar"></header>
+    <header id="toolbar">
+      <div class="toolbar-brand">csvomg</div>
+      <div class="toolbar-actions">
+        <button id="btn-toolbar-new" class="btn btn-secondary">New</button>
+        <button id="btn-toolbar-open" class="btn btn-secondary">Open...</button>
+        <button id="btn-toolbar-save" class="btn btn-primary" disabled>Save</button>
+      </div>
+    </header>
     <nav id="tab-bar"></nav>
     <main id="app-viewport">
       <!-- Empty state by default -->

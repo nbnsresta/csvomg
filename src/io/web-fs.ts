@@ -106,8 +106,8 @@ async function saveToHandle(handle: FileHandle, text: string): Promise<void> {
   await writable.close();
 }
 
-/** Prompts for a new save location (Chromium) or triggers a download (fallback). Returns the new handle, if any. */
-async function saveFileAs(text: string, suggestedName: string): Promise<FileHandle | null> {
+/** Prompts for a new save location (Chromium) or triggers a download (fallback). Returns the new handle and chosen name, if any. */
+async function saveFileAs(text: string, suggestedName: string): Promise<{ handle: FileHandle; name: string } | null> {
   if (supportsFileSystemAccess()) {
     let handle: FileSystemFileHandle;
     try {
@@ -117,7 +117,7 @@ async function saveFileAs(text: string, suggestedName: string): Promise<FileHand
       throw err;
     }
     await saveToHandle(handle, text);
-    return handle;
+    return { handle, name: handle.name };
   }
   downloadFallback(text, suggestedName);
   return null;

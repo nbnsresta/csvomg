@@ -22,6 +22,11 @@ export function createDataModel(
   };
 }
 
+/** True if any cell has non-whitespace content. Header text alone doesn't count. */
+export function hasContent(data: DataModel): boolean {
+  return data.rows.some((row) => row.some((cell) => cell.trim() !== ''));
+}
+
 function moveItem<T>(arr: T[], from: number, to: number): T[] {
   const copy = [...arr];
   const [item] = copy.splice(from, 1);

@@ -1,3 +1,5 @@
+export type FileType = 'csv' | 'json';
+
 export interface DataModel {
   headers: string[];
   rows: string[][];
