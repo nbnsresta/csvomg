@@ -1,0 +1,453 @@
+/* Design System Tokens */
+:root {
+  /* Dark Mode Default */
+  --bg-color: hsl(225, 15%, 8%);
+  --surface-color: hsl(225, 15%, 12%);
+  --surface-hover: hsl(225, 15%, 16%);
+  
+  --cell-bg: hsl(225, 12%, 14%);
+  --cell-alt: hsl(225, 12%, 11%);
+  --cell-hover: hsla(0, 0%, 100%, 0.04);
+  
+  --border-color: hsl(225, 10%, 20%);
+  --border-light: hsl(225, 10%, 26%);
+  
+  --text-primary: hsl(225, 10%, 90%);
+  --text-secondary: hsl(225, 10%, 55%);
+  --text-muted: hsl(225, 10%, 40%);
+  
+  --accent: hsl(250, 85%, 65%);
+  --accent-hover: hsl(250, 85%, 72%);
+  --accent-transparent: hsla(250, 85%, 65%, 0.15);
+  
+  --success: hsl(145, 65%, 45%);
+  --warning: hsl(35, 90%, 55%);
+  --danger: hsl(0, 75%, 55%);
+  
+  /* Typography */
+  --font-ui: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+  
+  /* Layout */
+  --toolbar-height: 48px;
+  --tabbar-height: 32px;
+  --statusbar-height: 28px;
+  --header-height: 32px;
+  --row-height: 28px;
+  --gutter-width: 48px;
+  
+  /* Z-index layers */
+  --z-grid-header: 10;
+  --z-grid-gutter: 20;
+  --z-grid-corner: 30;
+  --z-floating: 100;
+}
+
+[data-theme="light"] {
+  --bg-color: hsl(225, 15%, 98%);
+  --surface-color: hsl(225, 15%, 95%);
+  --surface-hover: hsl(225, 15%, 90%);
+  
+  --cell-bg: hsl(0, 0%, 100%);
+  --cell-alt: hsl(225, 15%, 97%);
+  --cell-hover: hsla(0, 0%, 0%, 0.03);
+  
+  --border-color: hsl(225, 10%, 85%);
+  --border-light: hsl(225, 10%, 90%);
+  
+  --text-primary: hsl(225, 10%, 15%);
+  --text-secondary: hsl(225, 10%, 40%);
+  --text-muted: hsl(225, 10%, 60%);
+}
+
+/* Reset & Base */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden; /* App is a fixed viewport */
+  background-color: var(--bg-color);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* App Shell Layout */
+body {
+  display: grid;
+  grid-template-rows: var(--toolbar-height) var(--tabbar-height) 1fr var(--statusbar-height);
+  grid-template-columns: 100%;
+}
+
+header#toolbar {
+  background-color: var(--surface-color);
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  gap: 8px;
+}
+
+nav#tab-bar {
+  background-color: var(--bg-color);
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  overflow-x: auto;
+  scrollbar-width: none; /* Hide scrollbar for tabs */
+}
+nav#tab-bar::-webkit-scrollbar { display: none; }
+
+main#app-viewport {
+  position: relative;
+  overflow: hidden;
+  background-color: var(--cell-bg);
+}
+
+footer#status-bar {
+  background-color: var(--surface-color);
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* Empty State */
+#empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 32px;
+}
+
+.drop-zone {
+  border: 2px dashed var(--border-color);
+  border-radius: 8px;
+  padding: 48px;
+  text-align: center;
+  max-width: 500px;
+  width: 100%;
+  background-color: var(--surface-color);
+  transition: border-color 0.2s, background-color 0.2s;
+}
+
+.drop-zone.drag-active {
+  border-color: var(--accent);
+  background-color: var(--accent-transparent);
+}
+
+.drop-zone svg {
+  color: var(--text-muted);
+  margin-bottom: 16px;
+}
+
+.drop-zone h2 {
+  margin: 0 0 8px 0;
+  font-weight: 500;
+  font-size: 16px;
+}
+
+.drop-zone p {
+  color: var(--text-secondary);
+  margin: 0 0 24px 0;
+}
+
+.action-buttons {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
+/* Buttons */
+.btn {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 6px 12px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background-color: transparent;
+  color: var(--text-primary);
+  transition: all 0.15s ease;
+}
+
+.btn-primary {
+  background-color: var(--accent);
+  color: #fff;
+}
+.btn-primary:hover {
+  background-color: var(--accent-hover);
+}
+
+.btn-secondary {
+  background-color: var(--surface-hover);
+  border-color: var(--border-light);
+}
+.btn-secondary:hover {
+  background-color: var(--border-color);
+}
+
+/* Recent Files */
+#recent-files-container {
+  margin-top: 32px;
+  width: 100%;
+  max-width: 500px;
+}
+
+#recent-files-container h3 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin: 0 0 12px 0;
+}
+
+#recent-files-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Utilities */
+.hidden {
+  display: none !important;
+}
+
+/* Grid */
+#grid-container {
+  position: absolute;
+  inset: 0;
+}
+
+.grid-root {
+  position: absolute;
+  inset: 0;
+}
+
+.grid-scroll {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  outline: none;
+  /* Drag-to-select cells shouldn't also trigger the browser's native text selection — that's
+     what was making copy grab far more than the selected cells. Doesn't affect the edit <input>,
+     which always keeps its own independent text-selection behavior regardless of this. */
+  user-select: none;
+}
+
+/*
+ * Sticky, not absolutely-positioned-inside-the-scroll-container: an absolutely positioned
+ * descendant of the scrolling element scrolls right along with everything else (its "position"
+ * is relative to the scrollable content, not the viewport), so it needs a matching manual
+ * counter-transform to stay pinned — and that's fragile (see grid.ts history). `position: sticky`
+ * lets the browser do this natively. The header row and body are stacked in normal block flow
+ * (header first, fixed height; body second, height set in JS) — their combined size IS
+ * grid-scroll's scrollable range, no separate spacer element needed.
+ */
+.grid-header-wrap {
+  position: sticky;
+  top: 0;
+  height: var(--header-height);
+  background-color: var(--surface-color);
+  border-bottom: 1px solid var(--border-color);
+  z-index: var(--z-grid-header);
+}
+
+/*
+ * Absolute + inset:0, not a normal-flow sibling of grid-corner: it needs to overlay the same
+ * box as the corner (cell left-offsets already start past GUTTER_WIDTH, so there's no visual
+ * collision), not stack below it — the same reasoning as .grid-cells below.
+ */
+.grid-header-cells {
+  position: absolute;
+  inset: 0;
+}
+
+.grid-header-cell {
+  position: absolute;
+  top: 0;
+  height: var(--header-height);
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-right: 1px solid var(--border-color);
+  box-sizing: border-box;
+}
+
+/* Nested sticky (left, inside a sticky-top ancestor) is the standard way to pin a corner cell. */
+.grid-corner {
+  position: sticky;
+  left: 0;
+  width: var(--gutter-width);
+  height: 100%;
+  background-color: var(--surface-color);
+  border-right: 1px solid var(--border-color);
+  z-index: var(--z-grid-corner);
+}
+
+.grid-body {
+  position: relative;
+}
+
+.grid-gutter-wrap {
+  position: sticky;
+  left: 0;
+  width: var(--gutter-width);
+  height: 100%;
+  background-color: var(--surface-color);
+  border-right: 1px solid var(--border-color);
+  z-index: var(--z-grid-gutter);
+}
+
+.grid-gutter-cell {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: var(--row-height);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 8px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  box-sizing: border-box;
+}
+
+/*
+ * Absolute + inset:0, not a normal-flow sibling of grid-gutter-wrap: it needs to overlay the
+ * same box as the gutter (cell left-offsets already start past GUTTER_WIDTH, so there's no
+ * visual collision), not stack below it the way two block-level siblings normally would.
+ */
+.grid-cells {
+  position: absolute;
+  inset: 0;
+}
+
+.grid-cell {
+  position: absolute;
+  height: var(--row-height);
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-right: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+  box-sizing: border-box;
+  cursor: cell;
+  background-color: var(--cell-bg);
+}
+
+.grid-cell.selected {
+  background-color: var(--accent-transparent);
+}
+
+.grid-cell.active {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  z-index: 1;
+}
+
+.grid-cell-input {
+  width: 100%;
+  height: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 0;
+  margin: 0;
+}
+
+/* Context Menu */
+.context-menu {
+  position: fixed;
+  z-index: var(--z-floating);
+  min-width: 160px;
+  padding: 4px;
+  background-color: var(--surface-color);
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.context-menu-item {
+  appearance: none;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.context-menu-item:hover:not(:disabled) {
+  background-color: var(--surface-hover);
+}
+
+.context-menu-item.danger {
+  color: var(--danger);
+}
+
+.context-menu-item.disabled,
+.context-menu-item:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-color);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-light);
+  border-radius: 5px;
+  border: 2px solid var(--bg-color);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}

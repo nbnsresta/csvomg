@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#131620" />
+    
+    <title>csvomg</title>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  </head>
+  <body>
+    <!-- App Shell -->
+    <header id="toolbar"></header>
+    <nav id="tab-bar"></nav>
+    <main id="app-viewport">
+      <!-- Empty state by default -->
+      <div id="empty-state">
+        <div class="drop-zone">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="12" y1="18" x2="12" y2="12"></line>
+            <line x1="9" y1="15" x2="15" y2="15"></line>
+          </svg>
+          <h2>Drop a CSV or JSON file here</h2>
+          <p>or</p>
+          <div class="action-buttons">
+            <button id="btn-open-file" class="btn btn-primary">Open File...</button>
+            <button id="btn-new-file" class="btn btn-secondary">Start Fresh</button>
+          </div>
+        </div>
+        
+        <div id="recent-files-container" class="hidden">
+          <h3>Recent Files</h3>
+          <ul id="recent-files-list"></ul>
+        </div>
+      </div>
+      <div id="grid-container" class="hidden"></div>
+    </main>
+    <footer id="status-bar">
+      <div class="status-left" id="status-selection">Ready</div>
+      <div class="status-right" id="status-counts"></div>
+    </footer>
+
+    <!-- Native Dialogs -->
+    <dialog id="dialog-import"></dialog>
+    <dialog id="dialog-export"></dialog>
+    <dialog id="dialog-fill"></dialog>
+    <dialog id="dialog-settings"></dialog>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
