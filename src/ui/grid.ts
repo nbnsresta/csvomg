@@ -26,6 +26,8 @@ export interface GridOptions {
   onCellEdit: (row: number, col: number, value: string) => void;
   onSelectionChange?: (selection: Selection | null) => void;
   onContextMenu?: (target: ContextMenuTarget) => void;
+  onUndo?: () => void;
+  onRedo?: () => void;
 }
 
 export class Grid {
@@ -494,6 +496,12 @@ export class Grid {
       event.preventDefault();
       this.anchor = { row: 0, col: 0 };
       this.setActive(this.data.rows.length - 1, this.data.headers.length - 1, true);
+    } else if (ctrlOrCmd && event.key.toLowerCase() === 'z' && !event.shiftKey) {
+      event.preventDefault();
+      this.options.onUndo?.();
+    } else if (ctrlOrCmd && (event.key.toLowerCase() === 'y' || (event.key.toLowerCase() === 'z' && event.shiftKey))) {
+      event.preventDefault();
+      this.options.onRedo?.();
     } else if (!ctrlOrCmd && !event.altKey && event.key.length === 1) {
       event.preventDefault();
       this.startEdit(this.active.row, this.active.col, event.key);

@@ -11,6 +11,7 @@ import {
   reorderColumn,
   setCell,
 } from './core/data.ts';
+import { createHistory, pushGroup, redo, undo, type History } from './core/history.ts';
 import { parseCSV, parseJSON, serializeCSV, serializeJSON } from './core/parser.ts';
 import { deleteDraft, loadDraft, saveDraft } from './io/drafts.ts';
 import { clearSession, loadSession, saveSession, type SessionState } from './io/session.ts';
@@ -18,7 +19,7 @@ import { openDroppedFile, webFileSystemAdapter } from './io/web-fs.ts';
 import type { FileHandle, OpenedFile } from './io/types.ts';
 import { showContextMenu, type ContextMenuItem } from './ui/context-menu.ts';
 import { Grid, type ContextMenuTarget } from './ui/grid.ts';
-import type { DataModel, FileType, Selection } from './types/index.ts';
+import type { DataModel, Diff, FileType, Mutation, Selection } from './types/index.ts';
 
 const emptyState = document.getElementById('empty-state') as HTMLDivElement;
 const gridContainer = document.getElementById('grid-container') as HTMLDivElement;
@@ -43,6 +44,7 @@ interface DocTab {
   handle: FileHandle | null;
   fileType: FileType;
   dirty: boolean;
+  history: History;
 }
 
 const MAX_TABS = 10;
@@ -97,6 +99,8 @@ const grid = new Grid(gridContainer, {
   onCellEdit: handleCellEdit,
   onSelectionChange: updateSelectionStatus,
   onContextMenu: handleContextMenu,
+  onUndo: performUndo,
+  onRedo: performRedo,
 });
 
 function detectFileType(filename: string): FileType {
@@ -214,6 +218,7 @@ function loadFile(opened: OpenedFile): void {
     handle: opened.handle,
     fileType: parsed.type,
     dirty: false,
+    history: createHistory(),
   };
   tabs.push(tab);
   activateTab(tab.id);
@@ -227,16 +232,15 @@ function newFile(): void {
     handle: null,
     fileType: 'csv',
     dirty: true,
+    history: createHistory(),
   };
   tabs.push(tab);
   activateTab(tab.id);
   void saveDraft(tab.id, tab.data, tab.fileType).catch((err) => console.error('draft autosave failed', err));
 }
 
-/** Commits a new DataModel from any mutation (cell edit, row/column action, paste, clear, ...). */
-function commitMutation(data: DataModel): void {
-  const tab = getActiveTab();
-  if (!tab) return;
+/** Applies a resolved DataModel to the active tab: dirty flag, grid render, status, draft autosave. */
+function applyTabUpdate(tab: DocTab, data: DataModel): void {
   tab.data = data;
   tab.dirty = true;
   grid.setData(tab.data);
@@ -246,11 +250,43 @@ function commitMutation(data: DataModel): void {
   }
 }
 
+/**
+ * Commits a new DataModel from any mutation (cell edit, row/column action, clear, ...) and
+ * records it as one undo step. A single mutation passes one Diff; an operation that touches
+ * several cells at once (e.g. clearing a range) passes all of them as an array so the whole
+ * thing undoes in one step rather than cell-by-cell.
+ */
+function commitMutation(data: DataModel, diff: Diff | Diff[]): void {
+  const tab = getActiveTab();
+  if (!tab) return;
+  tab.history = pushGroup(tab.history, Array.isArray(diff) ? diff : [diff]);
+  applyTabUpdate(tab, data);
+}
+
+function performUndo(): void {
+  const tab = getActiveTab();
+  if (!tab) return;
+  const result = undo(tab.history, tab.data);
+  if (!result) return;
+  tab.history = result.history;
+  applyTabUpdate(tab, result.data);
+}
+
+function performRedo(): void {
+  const tab = getActiveTab();
+  if (!tab) return;
+  const result = redo(tab.history, tab.data);
+  if (!result) return;
+  tab.history = result.history;
+  applyTabUpdate(tab, result.data);
+}
+
 function handleCellEdit(row: number, col: number, value: string): void {
   const tab = getActiveTab();
   if (!tab) return;
   if ((tab.data.rows[row]?.[col] ?? '') === value) return;
-  commitMutation(setCell(tab.data, row, col, value).data);
+  const mutation = setCell(tab.data, row, col, value);
+  commitMutation(mutation.data, mutation.diff);
 }
 
 function clearSelectedCells(): void {
@@ -263,12 +299,15 @@ function clearSelectedCells(): void {
   const minCol = Math.min(sel.startCol, sel.endCol);
   const maxCol = Math.max(sel.startCol, sel.endCol);
   let data = tab.data;
+  const diffs: Diff[] = [];
   for (let r = minRow; r <= maxRow; r++) {
     for (let c = minCol; c <= maxCol; c++) {
-      data = setCell(data, r, c, '').data;
+      const mutation = setCell(data, r, c, '');
+      data = mutation.data;
+      diffs.push(mutation.diff);
     }
   }
-  commitMutation(data);
+  commitMutation(data, diffs);
 }
 
 /**
@@ -291,18 +330,19 @@ function handleContextMenu(target: ContextMenuTarget): void {
   const tab = getActiveTab();
   if (!tab) return;
   const data = tab.data;
+  const commit = <D extends Diff>(mutation: Mutation<D>) => commitMutation(mutation.data, mutation.diff);
 
   if (target.zone === 'row') {
     const items: ContextMenuItem[] = [
-      { label: 'Insert row above', onSelect: () => commitMutation(insertRow(data, target.row).data) },
-      { label: 'Insert row below', onSelect: () => commitMutation(insertRow(data, target.row + 1).data) },
-      { label: 'Duplicate row', onSelect: () => commitMutation(duplicateRow(data, target.row).data) },
+      { label: 'Insert row above', onSelect: () => commit(insertRow(data, target.row)) },
+      { label: 'Insert row below', onSelect: () => commit(insertRow(data, target.row + 1)) },
+      { label: 'Duplicate row', onSelect: () => commit(duplicateRow(data, target.row)) },
       {
         label: 'Delete row',
         danger: true,
         onSelect: () => {
-          if (!confirm(`Delete row ${target.row + 1}? This can't be undone yet.`)) return;
-          commitMutation(deleteRow(data, target.row).data);
+          if (!confirm(`Delete row ${target.row + 1}?`)) return;
+          commit(deleteRow(data, target.row));
         },
       },
     ];
@@ -314,32 +354,32 @@ function handleContextMenu(target: ContextMenuTarget): void {
     const lastCol = data.headers.length - 1;
     const headerName = data.headers[target.col] || `Column ${target.col + 1}`;
     const items: ContextMenuItem[] = [
-      { label: 'Insert column left', onSelect: () => commitMutation(insertColumn(data, target.col).data) },
-      { label: 'Insert column right', onSelect: () => commitMutation(insertColumn(data, target.col + 1).data) },
+      { label: 'Insert column left', onSelect: () => commit(insertColumn(data, target.col)) },
+      { label: 'Insert column right', onSelect: () => commit(insertColumn(data, target.col + 1)) },
       {
         label: 'Rename column',
         onSelect: () => {
           const name = prompt('Column name', data.headers[target.col]);
           if (name === null) return;
-          commitMutation(renameColumn(data, target.col, name).data);
+          commit(renameColumn(data, target.col, name));
         },
       },
       {
         label: 'Move left',
         disabled: target.col === 0,
-        onSelect: () => commitMutation(reorderColumn(data, target.col, target.col - 1).data),
+        onSelect: () => commit(reorderColumn(data, target.col, target.col - 1)),
       },
       {
         label: 'Move right',
         disabled: target.col === lastCol,
-        onSelect: () => commitMutation(reorderColumn(data, target.col, target.col + 1).data),
+        onSelect: () => commit(reorderColumn(data, target.col, target.col + 1)),
       },
       {
         label: 'Delete column',
         danger: true,
         onSelect: () => {
-          if (!confirm(`Delete column "${headerName}"? This can't be undone yet.`)) return;
-          commitMutation(deleteColumn(data, target.col).data);
+          if (!confirm(`Delete column "${headerName}"?`)) return;
+          commit(deleteColumn(data, target.col));
         },
       },
     ];
@@ -482,7 +522,7 @@ async function restoreSession(): Promise<void> {
       if (!draft) continue;
       const data = createDataModel(draft.headers, draft.rows, draft.filename, draft.delimiter);
       if (!hasContent(data)) continue;
-      tabs.push({ id: ref.id, data, handle: null, fileType: draft.fileType, dirty: true });
+      tabs.push({ id: ref.id, data, handle: null, fileType: draft.fileType, dirty: true, history: createHistory() });
       continue;
     }
 
@@ -496,7 +536,14 @@ async function restoreSession(): Promise<void> {
       const file = await handle.getFile();
       const opened: OpenedFile = { name: file.name, text: await file.text(), handle };
       const parsed = parseOpenedFile(opened);
-      tabs.push({ id: ref.id, data: parsed.data, handle, fileType: parsed.type, dirty: false });
+      tabs.push({
+        id: ref.id,
+        data: parsed.data,
+        handle,
+        fileType: parsed.type,
+        dirty: false,
+        history: createHistory(),
+      });
     } catch {
       continue;
     }
