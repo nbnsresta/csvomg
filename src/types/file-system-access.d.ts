@@ -25,4 +25,10 @@ declare global {
     showOpenFilePicker(options?: OpenFilePickerOptions): Promise<FileSystemFileHandle[]>;
     showSaveFilePicker(options?: SaveFilePickerOptions): Promise<FileSystemFileHandle>;
   }
+
+  interface DataTransferItem {
+    // Chromium-only; part of the File System Access API, not yet in lib.dom.d.ts. Resolves to
+    // null (not a rejection) when the drop isn't backed by a real OS file.
+    getAsFileSystemHandle?(): Promise<FileSystemFileHandle | FileSystemDirectoryHandle | null>;
+  }
 }

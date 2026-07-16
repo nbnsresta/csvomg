@@ -11,7 +11,7 @@ import {
   setCell,
 } from './core/data.ts';
 import { parseCSV, parseJSON, serializeCSV, serializeJSON } from './core/parser.ts';
-import { webFileSystemAdapter } from './io/web-fs.ts';
+import { openDroppedFile, webFileSystemAdapter } from './io/web-fs.ts';
 import type { FileHandle, OpenedFile } from './io/types.ts';
 import { showContextMenu, type ContextMenuItem } from './ui/context-menu.ts';
 import { Grid, type ContextMenuTarget } from './ui/grid.ts';
@@ -291,9 +291,10 @@ dropZone.addEventListener('dragleave', () => {
 dropZone.addEventListener('drop', (e) => {
   e.preventDefault();
   dropZone.classList.remove('drag-active');
-  const file = e.dataTransfer?.files?.[0];
-  if (!file) return;
-  void file.text().then((text) => loadFile({ name: file.name, text, handle: null }));
+  if (!e.dataTransfer) return;
+  void openDroppedFile(e.dataTransfer).then((opened) => {
+    if (opened) loadFile(opened);
+  });
 });
 
 window.addEventListener('keydown', (e) => {

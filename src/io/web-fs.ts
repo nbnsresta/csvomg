@@ -72,6 +72,34 @@ function openFilesFallback(multiple: boolean): Promise<OpenedFile[]> {
   });
 }
 
+/**
+ * Resolves a dropped file, preferring a live FileSystemFileHandle (Chromium) so Ctrl+S can write
+ * straight back to it, same as the Open File picker. Firefox/Safari, or a drop that isn't backed
+ * by a real OS file, fall back to a plain File read with handle: null (Save As/download only).
+ *
+ * item.getAsFileSystemHandle() must be called synchronously within the drop handler, before any
+ * await — DataTransferItems are invalidated once the handler yields to the event loop.
+ */
+async function openDroppedFile(dataTransfer: DataTransfer): Promise<OpenedFile | null> {
+  const item = Array.from(dataTransfer.items).find((it) => it.kind === 'file');
+  if (!item) return null;
+
+  const handlePromise = item.getAsFileSystemHandle?.();
+  if (handlePromise) {
+    // Resolves to null (not a rejection) when the drop isn't backed by a real OS file —
+    // e.g. a synthetic DataTransfer, or a drag origin that can't vend a handle.
+    const handle = await handlePromise;
+    if (handle && handle.kind === 'file') {
+      const file = await handle.getFile();
+      return { name: file.name, text: await file.text(), handle };
+    }
+  }
+
+  const file = item.getAsFile();
+  if (!file) return null;
+  return { name: file.name, text: await file.text(), handle: null };
+}
+
 async function saveToHandle(handle: FileHandle, text: string): Promise<void> {
   const writable = await (handle as FileSystemFileHandle).createWritable();
   await writable.write(text);
@@ -107,6 +135,8 @@ function downloadFallback(text: string, filename: string): void {
   link.remove();
   URL.revokeObjectURL(url);
 }
+
+export { openDroppedFile };
 
 export const webFileSystemAdapter: FileSystemAdapter = {
   supportsDirectSave: supportsFileSystemAccess(),
