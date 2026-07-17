@@ -1,10 +1,11 @@
 /** Shared IndexedDB connection + transaction helper for drafts.ts and session.ts. */
 
 const DB_NAME = 'csvomg-drafts';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 export const DRAFTS_STORE = 'drafts';
 export const SESSION_STORE = 'session';
+export const RECENT_FILES_STORE = 'recent-files';
 
 export function openLocalDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -16,6 +17,9 @@ export function openLocalDb(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(SESSION_STORE)) {
         db.createObjectStore(SESSION_STORE, { keyPath: 'key' });
+      }
+      if (!db.objectStoreNames.contains(RECENT_FILES_STORE)) {
+        db.createObjectStore(RECENT_FILES_STORE, { keyPath: 'id' });
       }
     };
     req.onsuccess = () => resolve(req.result);

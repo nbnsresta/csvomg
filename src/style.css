@@ -154,6 +154,36 @@ nav#tab-bar::-webkit-scrollbar { display: none; }
   flex-shrink: 0;
 }
 
+/* --- reconnect-tab feature (retry #2, 2026-07-17) — see STATUS.md for revert instructions --- */
+.tab-needs-reconnect {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.tab-reconnect-icon {
+  font-size: 11px;
+  color: var(--warning);
+  flex-shrink: 0;
+  display: inline-block;
+}
+
+.tab-reconnecting {
+  cursor: wait;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .tab-reconnect-icon-spinning {
+    animation: tab-reconnect-spin 1s linear infinite;
+  }
+}
+
+@keyframes tab-reconnect-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* --- end reconnect-tab feature CSS --- */
+
 .tab-close {
   appearance: none;
   border: none;
@@ -314,6 +344,54 @@ footer#status-bar {
   50% { transform: translateY(-6px); }
 }
 
+/* --- reconnect-tab feature (retry #2, 2026-07-17/18) — see STATUS.md for revert instructions --- */
+.reconnect-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-floating);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--overlay-backdrop);
+  backdrop-filter: blur(4px);
+}
+
+.reconnect-dialog {
+  width: 100%;
+  max-width: 380px;
+  margin: 24px;
+  padding: 24px;
+  background-color: var(--surface-color);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+}
+
+.reconnect-dialog h3 {
+  margin: 0 0 10px 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.reconnect-dialog-desc {
+  margin: 0 0 20px 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.reconnect-dialog-desc.reconnect-dialog-error {
+  color: var(--danger);
+}
+
+.reconnect-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+/* --- end reconnect-tab feature CSS (reconnect-dialog) --- */
+
 /* Buttons */
 .btn {
   appearance: none;
@@ -375,6 +453,46 @@ footer#status-bar {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.recent-file-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 6px;
+}
+
+.recent-file-item:hover {
+  background-color: var(--cell-hover);
+}
+
+.recent-file-open {
+  appearance: none;
+  border: none;
+  background: transparent;
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+}
+
+.recent-file-name {
+  color: var(--text-primary);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-file-meta {
+  color: var(--text-muted);
+  font-size: 11px;
+  flex-shrink: 0;
+  margin-left: auto;
 }
 
 /* Utilities */

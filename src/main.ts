@@ -14,12 +14,20 @@ import {
 import { createHistory, pushGroup, redo, undo, type History } from './core/history.ts';
 import { parseCSV, parseJSON, serializeCSV, serializeJSON } from './core/parser.ts';
 import { deleteDraft, loadDraft, saveDraft } from './io/drafts.ts';
+import {
+  listRecentFiles,
+  recordRecentDraft,
+  recordRecentFile,
+  removeRecentFile,
+  type RecentFileEntry,
+} from './io/recent-files.ts';
 import { clearSession, loadSession, saveSession, type SessionState } from './io/session.ts';
 import { openDroppedFile, webFileSystemAdapter } from './io/web-fs.ts';
 import type { FileHandle, OpenedFile } from './io/types.ts';
 import { showContextMenu, type ContextMenuItem } from './ui/context-menu.ts';
 import { createFindBar } from './ui/find-bar.ts';
 import { Grid, type CellEdit, type ContextMenuTarget } from './ui/grid.ts';
+import { showReconnectDialog } from './ui/reconnect-dialog.ts';
 import type { DataModel, Diff, FileType, Mutation, Selection } from './types/index.ts';
 
 const emptyState = document.getElementById('empty-state') as HTMLDivElement;
@@ -33,6 +41,8 @@ const btnToolbarNew = document.getElementById('btn-toolbar-new') as HTMLButtonEl
 const btnToolbarOpen = document.getElementById('btn-toolbar-open') as HTMLButtonElement;
 const btnToolbarSave = document.getElementById('btn-toolbar-save') as HTMLButtonElement;
 const tabBar = document.getElementById('tab-bar') as HTMLElement;
+const recentFilesContainer = document.getElementById('recent-files-container') as HTMLDivElement;
+const recentFilesList = document.getElementById('recent-files-list') as HTMLUListElement;
 
 // The only place a venue-specific FileSystemAdapter is chosen. Swapping venues (extension,
 // future VS Code host) means swapping this one line — nothing below here should import
@@ -46,6 +56,10 @@ interface DocTab {
   fileType: FileType;
   dirty: boolean;
   history: History;
+  // --- reconnect-tab feature (retry #2, 2026-07-17): easy to fully revert, see STATUS.md ---
+  /** True when restored from session with an unconfirmed handle permission — no content loaded yet, shown as a dimmed tab that reconnects on click. */
+  needsReconnect?: boolean;
+  // --- end reconnect-tab feature field ---
 }
 
 const MAX_TABS = 10;
@@ -84,6 +98,8 @@ function persistSession(): void {
     return;
   }
   const state: SessionState = {
+    // reconnect-tab feature: file-backed tabs are persisted too (was draft-only) so
+    // restoreSession() can attempt them again — see STATUS.md.
     tabs: tabs.map((t) => ({
       id: t.id,
       kind: t.handle ? 'file' : 'draft',
@@ -201,6 +217,19 @@ function parseOpenedFile(opened: OpenedFile): { data: DataModel; type: FileType 
   return { data: createDataModel(headers, rows, opened.name, delimiter), type };
 }
 
+/**
+ * Requests read permission — must be called from a real user gesture, browsers won't prompt
+ * otherwise — and re-reads the handle's current content from disk. Throws on denial or a
+ * moved/deleted file; callers alert() and decide their own cleanup.
+ */
+async function reconnectFileHandle(handle: FileSystemFileHandle): Promise<{ data: DataModel; type: FileType }> {
+  const permission = await handle.requestPermission({ mode: 'read' });
+  if (permission !== 'granted') throw new Error('Permission denied');
+  const file = await handle.getFile();
+  const opened: OpenedFile = { name: file.name, text: await file.text(), handle };
+  return parseOpenedFile(opened);
+}
+
 function serializeTab(tab: DocTab): string {
   return tab.fileType === 'json'
     ? serializeJSON(tab.data.headers, tab.data.rows)
@@ -217,6 +246,113 @@ function showGrid(): void {
 function showEmptyState(): void {
   gridContainer.classList.add('hidden');
   emptyState.classList.remove('hidden');
+  void refreshRecentFilesUI();
+}
+
+/** Hand-rolled, zero-dependency relative-time label for Recent Files rows. */
+function formatRelativeTime(timestamp: number): string {
+  const seconds = Math.floor((Date.now() - timestamp) / 1000);
+  if (seconds < 60) return 'just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(timestamp).toLocaleDateString();
+}
+
+async function refreshRecentFilesUI(): Promise<void> {
+  const entries = await listRecentFiles().catch(() => []);
+  recentFilesContainer.classList.toggle('hidden', entries.length === 0);
+  recentFilesList.replaceChildren(
+    ...entries.map((entry) => {
+      const li = document.createElement('li');
+      li.className = 'recent-file-item';
+
+      const open = document.createElement('button');
+      open.className = 'recent-file-open';
+      open.addEventListener('click', () => void reopenRecentFile(entry));
+
+      const name = document.createElement('span');
+      name.className = 'recent-file-name';
+      name.textContent = entry.filename;
+      open.appendChild(name);
+
+      const meta = document.createElement('span');
+      meta.className = 'recent-file-meta';
+      meta.textContent = formatRelativeTime(entry.updatedAt);
+      open.appendChild(meta);
+
+      li.appendChild(open);
+
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'tab-close';
+      removeBtn.textContent = '×';
+      removeBtn.setAttribute('aria-label', `Remove ${entry.filename} from Recent Files`);
+      removeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void dismissRecentFile(entry);
+      });
+      li.appendChild(removeBtn);
+
+      return li;
+    }),
+  );
+}
+
+async function dismissRecentFile(entry: RecentFileEntry): Promise<void> {
+  if (entry.kind === 'draft') {
+    await deleteDraft(entry.id).catch((err) => console.error('draft cleanup failed', err));
+  }
+  await removeRecentFile(entry.id).catch((err) => console.error('recent-file remove failed', err));
+  void refreshRecentFilesUI();
+}
+
+async function reopenRecentFile(entry: RecentFileEntry): Promise<void> {
+  if (!canOpenNewTab()) return;
+
+  if (entry.kind === 'draft') {
+    const draft = await loadDraft(entry.id).catch(() => null);
+    if (!draft) {
+      alert(`"${entry.filename}" is no longer available.`);
+      await removeRecentFile(entry.id).catch(() => {});
+      await refreshRecentFilesUI();
+      return;
+    }
+    const data = createDataModel(draft.headers, draft.rows, draft.filename, draft.delimiter);
+    tabs.push({ id: entry.id, data, handle: null, fileType: draft.fileType, dirty: true, history: createHistory() });
+    activateTab(entry.id);
+    return;
+  }
+
+  // --- reconnect-tab feature: routed through the same blocking dialog as reconnectTab(), see STATUS.md ---
+  if (reconnectingTabId !== null) return;
+  const handle = entry.handle as FileSystemFileHandle;
+  showReconnectDialog({
+    filename: entry.filename,
+    onAttempt: async () => {
+      reconnectingTabId = entry.id; // no real tab yet to associate — just claims the global slot
+      try {
+        const parsed = await reconnectFileHandle(handle);
+        const tab: DocTab = {
+          id: crypto.randomUUID(),
+          data: parsed.data,
+          handle,
+          fileType: parsed.type,
+          dirty: false,
+          history: createHistory(),
+        };
+        tabs.push(tab);
+        activateTab(tab.id);
+      } finally {
+        reconnectingTabId = null;
+      }
+    },
+  });
+  // A failed attempt no longer auto-evicts the Recent Files entry — the dialog's own "Try Again"
+  // lets the user retry without losing it, since a failure here can be purely transient.
+  // --- end reopenRecentFile() file-kind branch ---
 }
 
 function activateTab(id: string): void {
@@ -229,16 +365,81 @@ function activateTab(id: string): void {
   if (findBar.isOpen()) runFind(findQuery);
 }
 
+// --- reconnect-tab feature (retry #2, 2026-07-17/18) — see STATUS.md for revert instructions ---
+// A second attempt while one's already in flight isn't just wasted — clicking anywhere on the
+// page while the browser's native permission prompt is up can register as an outside-click on
+// that prompt, dismissing it as an implicit denial. showReconnectDialog()'s full-page overlay
+// already makes a second click structurally impossible while it's showing; this is a cheap
+// defensive backstop, and lets renderTabs() know which tab (if any) to show as spinning.
+let reconnectingTabId: string | null = null;
+
+function reconnectTab(id: string): void {
+  const tab = tabs.find((t) => t.id === id);
+  if (!tab || !tab.needsReconnect || !tab.handle || reconnectingTabId !== null) return;
+  const handle = tab.handle as FileSystemFileHandle;
+  showReconnectDialog({
+    filename: tab.data.meta.filename,
+    onAttempt: async () => {
+      reconnectingTabId = id;
+      renderTabs();
+      try {
+        const parsed = await reconnectFileHandle(handle);
+        tab.data = parsed.data;
+        tab.fileType = parsed.type;
+        tab.needsReconnect = false;
+        activateTab(id);
+      } finally {
+        reconnectingTabId = null;
+        // Redundant with activateTab()'s own render on success, but required on failure — the
+        // dialog handles its own error UI, nothing else would clear this tab's spinning icon.
+        renderTabs();
+      }
+    },
+  });
+}
+// --- end reconnectTab() ---
+
 function closeTab(id: string): void {
   const tab = tabs.find((t) => t.id === id);
   if (!tab) return;
-  if (tab.dirty && hasContent(tab.data) && !confirm(`Discard unsaved changes to "${tab.data.meta.filename}"?`)) {
+  // Tracks whether the confirm below actually fired (and was accepted) — a freshly opened,
+  // never-edited handle-less tab (e.g. a fallback-mode dropped/opened file, dirty: false) can
+  // have real content too, but wasn't dirty, so it never hit the dialog at all.
+  const confirmedDiscard = tab.dirty && hasContent(tab.data);
+  if (confirmedDiscard && !confirm(`Discard unsaved changes to "${tab.data.meta.filename}"?`)) {
     return;
   }
 
   const index = tabs.indexOf(tab);
   tabs = tabs.filter((t) => t.id !== id);
-  void deleteDraft(id).catch((err) => console.error('draft cleanup failed', err));
+
+  // showEmptyState()/updateStatus() below trigger an immediate (possibly stale-by-one, if this
+  // record/remove hasn't landed yet) recent-files refresh; chaining a second refresh once this
+  // settles keeps the list eventually consistent — e.g. reflecting cap eviction — without making
+  // tab-close itself wait on an IndexedDB round trip.
+  if (tab.handle) {
+    void recordRecentFile(tab.handle, tab.data.meta.filename, tab.fileType)
+      .then(() => refreshRecentFilesUI())
+      .catch((err) => console.error('recent-file record failed', err));
+  } else if (confirmedDiscard) {
+    // The user just explicitly confirmed "Discard unsaved changes?" — discard means discard.
+    void deleteDraft(id).catch((err) => console.error('draft cleanup failed', err));
+    void removeRecentFile(id)
+      .then(() => refreshRecentFilesUI())
+      .catch(() => {});
+  } else if (hasContent(tab.data)) {
+    // Handle-less but never flagged dirty — a freshly opened fallback-mode file (real content,
+    // just never got a live handle) rather than an Untitled draft. Nothing was discarded, so
+    // it's still worth keeping recoverable.
+    void recordRecentDraft(tab.id, tab.data.meta.filename, tab.fileType)
+      .then(() => refreshRecentFilesUI())
+      .catch((err) => console.error('recent-file record failed', err));
+  } else {
+    void deleteDraft(id).catch((err) => console.error('draft cleanup failed', err));
+    void removeRecentFile(id)
+      .then(() => refreshRecentFilesUI())
+      .catch(() => {});
+  }
 
   if (activeTabId !== id) {
     updateStatus();
@@ -259,14 +460,30 @@ function renderTabs(): void {
     ...tabs.map((tab) => {
       const el = document.createElement('div');
       el.className = tab.id === activeTabId ? 'tab tab-active' : 'tab';
-      el.addEventListener('click', () => activateTab(tab.id));
+      // --- reconnect-tab feature: dimmed tab + click-to-reconnect routing, see STATUS.md ---
+      const isReconnecting = reconnectingTabId === tab.id;
+      if (tab.needsReconnect) el.classList.add('tab-needs-reconnect');
+      if (isReconnecting) el.classList.add('tab-reconnecting');
+      el.addEventListener('click', () => {
+        if (tab.needsReconnect) reconnectTab(tab.id);
+        else activateTab(tab.id);
+      });
+      // --- end reconnect-tab click routing ---
 
       const nameSpan = document.createElement('span');
       nameSpan.className = 'tab-name';
       nameSpan.textContent = tab.data.meta.filename;
       el.appendChild(nameSpan);
 
-      if (tab.dirty) {
+      // --- reconnect-tab feature: reconnect glyph instead of the dirty-dot, see STATUS.md ---
+      if (tab.needsReconnect) {
+        const icon = document.createElement('span');
+        icon.className = isReconnecting ? 'tab-reconnect-icon tab-reconnect-icon-spinning' : 'tab-reconnect-icon';
+        icon.title = isReconnecting ? 'Reconnecting…' : 'Needs reconnect — click to restore';
+        icon.textContent = '⟳';
+        el.appendChild(icon);
+      } else if (tab.dirty) {
+        // --- end reconnect-tab icon branch ---
         const dot = document.createElement('span');
         dot.className = 'tab-dirty-dot';
         dot.title = 'Unsaved changes';
@@ -534,6 +751,7 @@ async function saveAs(): Promise<void> {
     tab.data = { ...tab.data, meta: { ...tab.data.meta, filename: result.name } };
     tab.dirty = false;
     void deleteDraft(tab.id).catch((err) => console.error('draft cleanup failed', err));
+    void removeRecentFile(tab.id).catch(() => {});
     updateStatus();
   } else if (!fs.supportsDirectSave) {
     // Fallback path triggers a download immediately; treat as saved.
@@ -661,13 +879,27 @@ async function restoreSession(): Promise<void> {
       continue;
     }
 
+    // --- reconnect-tab feature (retry #2, 2026-07-17) — see STATUS.md for revert instructions ---
     // kind === 'file': re-read live from disk. queryPermission doesn't need a user gesture
-    // (unlike requestPermission), so this can safely run unattended at boot. A denied/unknown
-    // permission, or a moved/deleted file, just drops that tab from the restored set.
+    // (unlike requestPermission), so this can safely run unattended at boot. A moved/deleted
+    // file just drops that tab from the restored set — no gesture could fix that anyway. A
+    // denied/unconfirmed permission instead restores as a dimmed "needs reconnect" placeholder
+    // (see reconnectTab()), since requestPermission() could still succeed from a real click.
     try {
       const handle = ref.handle as FileSystemFileHandle;
       const permission = await handle.queryPermission({ mode: 'read' });
-      if (permission !== 'granted') continue;
+      if (permission !== 'granted') {
+        tabs.push({
+          id: ref.id,
+          data: createDataModel([], [], ref.filename, ','),
+          handle,
+          fileType: ref.fileType,
+          dirty: false,
+          history: createHistory(),
+          needsReconnect: true,
+        });
+        continue;
+      }
       const file = await handle.getFile();
       const opened: OpenedFile = { name: file.name, text: await file.text(), handle };
       const parsed = parseOpenedFile(opened);
@@ -682,12 +914,23 @@ async function restoreSession(): Promise<void> {
     } catch {
       continue;
     }
+    // --- end reconnect-tab restore branch ---
   }
 
   if (tabs.length === 0) return;
   seedUntitledCounter();
-  const restoredActive = tabs.find((t) => t.id === session.activeTabId) ?? tabs[0];
-  activateTab(restoredActive.id);
+  // --- reconnect-tab feature: skip needsReconnect placeholders when picking what to activate ---
+  const restoredActive =
+    tabs.find((t) => t.id === session.activeTabId && !t.needsReconnect) ?? tabs.find((t) => !t.needsReconnect);
+  if (restoredActive) {
+    activateTab(restoredActive.id);
+  } else {
+    // Every restored tab needs reconnecting — nothing to show yet, but this still renders the
+    // placeholder tab pills and re-persists the session.
+    updateStatus();
+  }
+  // --- end reconnect-tab tail-activation change ---
 }
 
 void restoreSession();
+void refreshRecentFilesUI();
