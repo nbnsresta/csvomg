@@ -167,6 +167,19 @@ export class Grid {
     this.renderNow();
   }
 
+  /**
+   * Commits whatever cell edit is in progress, if any — a no-op otherwise. A mouse-triggered
+   * action (clicking another cell, another tab, the Save button) already commits incidentally,
+   * since focus moves off the edit <input> (firing blur) before the click handler runs. A
+   * keyboard-triggered action like Ctrl+S never touches DOM focus at all, so it wouldn't
+   * otherwise see an edit that's still sitting in the input and hasn't reached the data model
+   * yet. Callers that read tab data for something that must reflect the latest keystroke —
+   * saving, first and foremost — should call this before doing so.
+   */
+  commitPendingEdit(): void {
+    this.commitEdit();
+  }
+
   destroy(): void {
     this.scrollEl.removeEventListener('scroll', this.handleScroll);
     this.scrollEl.removeEventListener('keydown', this.handleKeyDown);

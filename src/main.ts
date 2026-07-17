@@ -725,6 +725,7 @@ async function openFileDialog(): Promise<void> {
 }
 
 async function save(): Promise<void> {
+  grid.commitPendingEdit();
   const tab = getActiveTab();
   if (!tab) return;
   const text = serializeTab(tab);
@@ -742,6 +743,7 @@ async function save(): Promise<void> {
 }
 
 async function saveAs(): Promise<void> {
+  grid.commitPendingEdit();
   const tab = getActiveTab();
   if (!tab) return;
   const text = serializeTab(tab);
