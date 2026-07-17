@@ -23,6 +23,8 @@
   --success: hsl(145, 65%, 45%);
   --warning: hsl(35, 90%, 55%);
   --danger: hsl(0, 75%, 55%);
+
+  --overlay-backdrop: hsla(225, 20%, 5%, 0.7);
   
   /* Typography */
   --font-ui: 'Inter', system-ui, sans-serif;
@@ -58,6 +60,8 @@
   --text-primary: hsl(225, 10%, 15%);
   --text-secondary: hsl(225, 10%, 40%);
   --text-muted: hsl(225, 10%, 60%);
+
+  --overlay-backdrop: hsla(225, 20%, 25%, 0.35);
 }
 
 /* Reset & Base */
@@ -210,11 +214,6 @@ footer#status-bar {
   transition: border-color 0.2s, background-color 0.2s;
 }
 
-.drop-zone.drag-active {
-  border-color: var(--accent);
-  background-color: var(--accent-transparent);
-}
-
 .drop-zone svg {
   color: var(--text-muted);
   margin-bottom: 16px;
@@ -235,6 +234,84 @@ footer#status-bar {
   display: flex;
   gap: 12px;
   justify-content: center;
+}
+
+/* Whole-page drop overlay */
+#page-drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-floating);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--overlay-backdrop);
+  backdrop-filter: blur(6px);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.18s ease, visibility 0s linear 0.18s;
+}
+
+#page-drop-overlay.visible {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.18s ease;
+}
+
+.page-drop-overlay-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin: 24px;
+  padding: 56px 72px;
+  border: 2px dashed var(--accent);
+  border-radius: 16px;
+  background-color: var(--surface-color);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35), 0 0 0 1px var(--accent-transparent);
+  color: var(--text-primary);
+  transform: scale(0.94);
+  transition: transform 0.18s ease;
+}
+
+#page-drop-overlay.visible .page-drop-overlay-inner {
+  transform: scale(1);
+}
+
+.page-drop-overlay-inner svg {
+  color: var(--accent);
+}
+
+.page-drop-overlay-inner h2 {
+  margin: 0;
+  font-weight: 600;
+  font-size: 20px;
+}
+
+.page-drop-overlay-inner p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  #page-drop-overlay.visible .page-drop-overlay-inner {
+    animation: drop-pulse 1.8s ease-in-out infinite;
+  }
+
+  #page-drop-overlay.visible .page-drop-overlay-inner svg {
+    animation: drop-bounce 1.4s ease-in-out infinite;
+  }
+}
+
+@keyframes drop-pulse {
+  0%, 100% { border-color: var(--accent); }
+  50% { border-color: var(--accent-hover); }
+}
+
+@keyframes drop-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
 }
 
 /* Buttons */

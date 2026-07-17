@@ -26,7 +26,7 @@ const emptyState = document.getElementById('empty-state') as HTMLDivElement;
 const gridContainer = document.getElementById('grid-container') as HTMLDivElement;
 const btnOpenFile = document.getElementById('btn-open-file') as HTMLButtonElement;
 const btnNewFile = document.getElementById('btn-new-file') as HTMLButtonElement;
-const dropZone = document.querySelector('.drop-zone') as HTMLDivElement;
+const pageDropOverlay = document.getElementById('page-drop-overlay') as HTMLDivElement;
 const statusSelection = document.getElementById('status-selection') as HTMLDivElement;
 const statusCounts = document.getElementById('status-counts') as HTMLDivElement;
 const btnToolbarNew = document.getElementById('btn-toolbar-new') as HTMLButtonElement;
@@ -180,6 +180,13 @@ function closeFind(): void {
   grid.focus();
 }
 
+const SUPPORTED_EXTENSIONS = ['.csv', '.tsv', '.json'];
+
+function isSupportedFile(filename: string): boolean {
+  const lower = filename.toLowerCase();
+  return SUPPORTED_EXTENSIONS.some((ext) => lower.endsWith(ext));
+}
+
 function detectFileType(filename: string): FileType {
   return filename.toLowerCase().endsWith('.json') ? 'json' : 'csv';
 }
@@ -283,6 +290,10 @@ function renderTabs(): void {
 
 function loadFile(opened: OpenedFile): void {
   if (!canOpenNewTab()) return;
+  if (!isSupportedFile(opened.name)) {
+    alert(`"${opened.name}" isn't a supported file type. csvomg opens .csv, .tsv, and .json files.`);
+    return;
+  }
   let parsed: { data: DataModel; type: FileType };
   try {
     parsed = parseOpenedFile(opened);
@@ -571,20 +582,45 @@ btnToolbarOpen.addEventListener('click', () => void openFileDialog());
 btnToolbarNew.addEventListener('click', newFile);
 btnToolbarSave.addEventListener('click', () => void save());
 
-dropZone.addEventListener('dragover', (e) => {
+// Whole page acts as a drop target (Google Drive/Photos-style), regardless of whether the
+// landing page or a document tab is currently showing. A dragenter/dragleave depth counter is
+// needed because those events fire (and bubble) for every element the pointer passes over —
+// naively hiding the overlay on any dragleave would flicker it off while still dragging over a
+// child element.
+let dragDepth = 0;
+
+function dataTransferHasFiles(dt: DataTransfer | null): boolean {
+  return !!dt && Array.from(dt.types).includes('Files');
+}
+
+window.addEventListener('dragenter', (e) => {
+  if (!dataTransferHasFiles(e.dataTransfer)) return;
   e.preventDefault();
-  dropZone.classList.add('drag-active');
+  dragDepth++;
+  pageDropOverlay.classList.add('visible');
 });
-dropZone.addEventListener('dragleave', () => {
-  dropZone.classList.remove('drag-active');
-});
-dropZone.addEventListener('drop', (e) => {
+window.addEventListener('dragover', (e) => {
+  if (!dataTransferHasFiles(e.dataTransfer)) return;
+  // Required on every dragover for the browser to allow a drop at all.
   e.preventDefault();
-  dropZone.classList.remove('drag-active');
+});
+window.addEventListener('dragleave', (e) => {
+  if (!dataTransferHasFiles(e.dataTransfer)) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) pageDropOverlay.classList.remove('visible');
+});
+window.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dragDepth = 0;
+  pageDropOverlay.classList.remove('visible');
   if (!e.dataTransfer) return;
-  void openDroppedFile(e.dataTransfer).then((opened) => {
-    if (opened) loadFile(opened);
-  });
+  void openDroppedFile(e.dataTransfer)
+    .then((opened) => {
+      if (opened) loadFile(opened);
+    })
+    .catch((err) => {
+      alert(`Failed to open dropped file: ${err instanceof Error ? err.message : String(err)}`);
+    });
 });
 
 window.addEventListener('keydown', (e) => {
