@@ -22,8 +22,20 @@ export type ContextMenuTarget =
   | { zone: 'col'; col: number; x: number; y: number }
   | { zone: 'cell'; row: number; col: number; x: number; y: number };
 
+export interface CellEdit {
+  row: number;
+  col: number;
+  value: string;
+}
+
 export interface GridOptions {
   onCellEdit: (row: number, col: number, value: string) => void;
+  /**
+   * Fired once for a multi-cell operation (paste, Delete/Backspace-clear) instead of calling
+   * onCellEdit per cell — lets the caller record it as a single undo step rather than one per
+   * cell. Falls back to per-cell onCellEdit calls if not provided.
+   */
+  onBulkEdit?: (edits: CellEdit[]) => void;
   onSelectionChange?: (selection: Selection | null) => void;
   onContextMenu?: (target: ContextMenuTarget) => void;
   onUndo?: () => void;
@@ -374,17 +386,29 @@ export class Grid {
     this.scrollEl.focus();
   }
 
+  /** Reports a multi-cell operation as one call, so callers can record it as a single undo step. */
+  private emitBulkEdit(edits: CellEdit[]): void {
+    if (edits.length === 0) return;
+    if (this.options.onBulkEdit) {
+      this.options.onBulkEdit(edits);
+    } else {
+      for (const edit of edits) this.options.onCellEdit(edit.row, edit.col, edit.value);
+    }
+  }
+
   private clearSelection(): void {
     if (!this.anchor || !this.active) return;
     const minRow = Math.min(this.anchor.row, this.active.row);
     const maxRow = Math.max(this.anchor.row, this.active.row);
     const minCol = Math.min(this.anchor.col, this.active.col);
     const maxCol = Math.max(this.anchor.col, this.active.col);
+    const edits: CellEdit[] = [];
     for (let r = minRow; r <= maxRow; r++) {
       for (let c = minCol; c <= maxCol; c++) {
-        this.options.onCellEdit(r, c, '');
+        edits.push({ row: r, col: c, value: '' });
       }
     }
+    this.emitBulkEdit(edits);
   }
 
   private handleScroll = (): void => {
@@ -595,15 +619,17 @@ export class Grid {
     if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
     const pasted = lines.map((line) => line.split('\t'));
     const { row: startRow, col: startCol } = this.active;
+    const edits: CellEdit[] = [];
     for (let i = 0; i < pasted.length; i++) {
       const targetRow = startRow + i;
       if (targetRow >= this.data.rows.length) break;
       for (let j = 0; j < pasted[i].length; j++) {
         const targetCol = startCol + j;
         if (targetCol >= this.data.headers.length) break;
-        this.options.onCellEdit(targetRow, targetCol, pasted[i][j]);
+        edits.push({ row: targetRow, col: targetCol, value: pasted[i][j] });
       }
     }
+    this.emitBulkEdit(edits);
   }
 
   private handlePaste = (event: ClipboardEvent): void => {

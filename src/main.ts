@@ -19,7 +19,7 @@ import { openDroppedFile, webFileSystemAdapter } from './io/web-fs.ts';
 import type { FileHandle, OpenedFile } from './io/types.ts';
 import { showContextMenu, type ContextMenuItem } from './ui/context-menu.ts';
 import { createFindBar } from './ui/find-bar.ts';
-import { Grid, type ContextMenuTarget } from './ui/grid.ts';
+import { Grid, type CellEdit, type ContextMenuTarget } from './ui/grid.ts';
 import type { DataModel, Diff, FileType, Mutation, Selection } from './types/index.ts';
 
 const emptyState = document.getElementById('empty-state') as HTMLDivElement;
@@ -98,6 +98,7 @@ function persistSession(): void {
 
 const grid = new Grid(gridContainer, {
   onCellEdit: handleCellEdit,
+  onBulkEdit: handleBulkEdit,
   onSelectionChange: updateSelectionStatus,
   onContextMenu: handleContextMenu,
   onUndo: performUndo,
@@ -364,6 +365,22 @@ function handleCellEdit(row: number, col: number, value: string): void {
   if ((tab.data.rows[row]?.[col] ?? '') === value) return;
   const mutation = setCell(tab.data, row, col, value);
   commitMutation(mutation.data, mutation.diff);
+}
+
+/** A multi-cell operation (paste, Delete/Backspace-clear) — recorded as a single undo step. */
+function handleBulkEdit(edits: CellEdit[]): void {
+  const tab = getActiveTab();
+  if (!tab) return;
+  let data = tab.data;
+  const diffs: Diff[] = [];
+  for (const edit of edits) {
+    if ((data.rows[edit.row]?.[edit.col] ?? '') === edit.value) continue;
+    const mutation = setCell(data, edit.row, edit.col, edit.value);
+    data = mutation.data;
+    diffs.push(mutation.diff);
+  }
+  if (diffs.length === 0) return;
+  commitMutation(data, diffs);
 }
 
 function clearSelectedCells(): void {
