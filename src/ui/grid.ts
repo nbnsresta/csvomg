@@ -139,6 +139,17 @@ export class Grid {
     this.scrollEl.focus();
   }
 
+  /**
+   * Selects and scrolls to a single cell — e.g. for jumping to a Find match. Deliberately does
+   * NOT call focus(): Find calls this on every keystroke while the find input itself is focused,
+   * and stealing focus back to the grid mid-search would redirect the very next typed character
+   * into a cell edit instead of the search box. Callers that do want the grid focused afterward
+   * (there are none today) should call grid.focus() themselves.
+   */
+  selectCell(row: number, col: number): void {
+    this.setActive(row, col, false);
+  }
+
   /** Forces a re-render — call after the container becomes visible (e.g. leaving display:none). */
   refresh(): void {
     this.renderNow();

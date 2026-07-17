@@ -18,6 +18,7 @@ import { clearSession, loadSession, saveSession, type SessionState } from './io/
 import { openDroppedFile, webFileSystemAdapter } from './io/web-fs.ts';
 import type { FileHandle, OpenedFile } from './io/types.ts';
 import { showContextMenu, type ContextMenuItem } from './ui/context-menu.ts';
+import { createFindBar } from './ui/find-bar.ts';
 import { Grid, type ContextMenuTarget } from './ui/grid.ts';
 import type { DataModel, Diff, FileType, Mutation, Selection } from './types/index.ts';
 
@@ -103,6 +104,81 @@ const grid = new Grid(gridContainer, {
   onRedo: performRedo,
 });
 
+interface FindMatch {
+  row: number;
+  col: number;
+}
+
+let findMatches: FindMatch[] = [];
+let findIndex = -1;
+let findQuery = '';
+
+const findBar = createFindBar({
+  onSearch: runFind,
+  onNext: findNext,
+  onPrev: findPrev,
+  onClose: closeFind,
+});
+
+/** Searches the active tab's data cells (not headers) case-insensitively. */
+function runFind(query: string): void {
+  findQuery = query;
+  findMatches = [];
+  findIndex = -1;
+  const tab = getActiveTab();
+  if (!tab || !query) {
+    findBar.setMatchStatus(0, 0);
+    return;
+  }
+  const needle = query.toLowerCase();
+  for (let r = 0; r < tab.data.rows.length; r++) {
+    for (let c = 0; c < tab.data.headers.length; c++) {
+      if ((tab.data.rows[r][c] ?? '').toLowerCase().includes(needle)) {
+        findMatches.push({ row: r, col: c });
+      }
+    }
+  }
+  if (findMatches.length > 0) {
+    findIndex = 0;
+    jumpToFindMatch();
+  } else {
+    findBar.setMatchStatus(0, 0);
+  }
+}
+
+function jumpToFindMatch(): void {
+  const match = findMatches[findIndex];
+  if (!match) return;
+  grid.selectCell(match.row, match.col);
+  findBar.setMatchStatus(findIndex + 1, findMatches.length);
+}
+
+function findNext(): void {
+  if (findMatches.length === 0) return;
+  findIndex = (findIndex + 1) % findMatches.length;
+  jumpToFindMatch();
+}
+
+function findPrev(): void {
+  if (findMatches.length === 0) return;
+  findIndex = (findIndex - 1 + findMatches.length) % findMatches.length;
+  jumpToFindMatch();
+}
+
+function openFind(): void {
+  if (!getActiveTab()) return;
+  findBar.show();
+  findBar.focusInput();
+  if (findQuery) runFind(findQuery);
+}
+
+function closeFind(): void {
+  findBar.hide();
+  findMatches = [];
+  findIndex = -1;
+  grid.focus();
+}
+
 function detectFileType(filename: string): FileType {
   return filename.toLowerCase().endsWith('.json') ? 'json' : 'csv';
 }
@@ -142,6 +218,7 @@ function activateTab(id: string): void {
   grid.setData(tab.data);
   showGrid();
   updateStatus();
+  if (findBar.isOpen()) runFind(findQuery);
 }
 
 function closeTab(id: string): void {
@@ -509,6 +586,11 @@ window.addEventListener('keydown', (e) => {
   } else if (key === 'n') {
     e.preventDefault();
     newFile();
+  } else if (key === 'f') {
+    // Overrides the browser's native find-in-page: the grid is virtualized, so native find
+    // could only ever see whatever rows happen to be rendered near the current scroll position.
+    e.preventDefault();
+    openFind();
   }
 });
 
