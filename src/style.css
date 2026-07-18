@@ -709,13 +709,26 @@ footer#status-bar {
   right: 12px;
   z-index: var(--z-floating);
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 6px;
   padding: 6px 8px;
   background-color: var(--surface-color);
   border: 1px solid var(--border-light);
   border-radius: 6px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.find-row,
+.find-replace-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.find-btn-spacer {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
 }
 
 .find-input {
@@ -757,11 +770,35 @@ footer#status-bar {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  padding: 0px;
+}
+
+.find-btn-reverse {
+  transform: rotate(180deg);
+}
+
+.find-btn svg {
+  width: 14px;
+  height: 14px;
 }
 
 .find-btn:hover {
   background-color: var(--surface-hover);
   color: var(--text-primary);
+}
+
+.find-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.find-toggle-open {
+  transform: rotate(180deg);
+}
+
+.find-btn.replace-btn svg {
+  width: 18px;
+  height: 18px;
 }
 
 /* Custom Scrollbars */

@@ -49,6 +49,19 @@ const recentFilesList = document.getElementById('recent-files-list') as HTMLULis
 // web-fs.ts or DOM file-picker types directly.
 const fs = webFileSystemAdapter;
 
+interface TabFindState {
+  open: boolean;
+  query: string;
+  replacement: string;
+  replaceOpen: boolean;
+  /** -1 when there's no current match. */
+  matchIndex: number;
+}
+
+function createFindState(): TabFindState {
+  return { open: false, query: '', replacement: '', replaceOpen: false, matchIndex: -1 };
+}
+
 interface DocTab {
   id: string;
   data: DataModel;
@@ -56,6 +69,8 @@ interface DocTab {
   fileType: FileType;
   dirty: boolean;
   history: History;
+  /** Find/Replace session for this tab — never shared across tabs, see syncFindBar(). */
+  find: TabFindState;
   // --- reconnect-tab feature (retry #2, 2026-07-17): easy to fully revert, see STATUS.md ---
   /** True when restored from session with an unconfirmed handle permission — no content loaded yet, shown as a dimmed tab that reconnects on click. */
   needsReconnect?: boolean;
@@ -126,73 +141,176 @@ interface FindMatch {
   col: number;
 }
 
+/** Matches for the active tab's current query — a derived cache, recomputed at every point it
+ * could go stale (search, replace, tab switch). The persisted bits (query/replacement/open/
+ * matchIndex) live on each tab's own `find`, see TabFindState. */
 let findMatches: FindMatch[] = [];
-let findIndex = -1;
-let findQuery = '';
 
 const findBar = createFindBar({
   onSearch: runFind,
   onNext: findNext,
   onPrev: findPrev,
   onClose: closeFind,
+  onReplace: findReplace,
+  onReplaceAll: findReplaceAll,
+  onReplacementInput: setReplacementText,
+  onToggleReplace: toggleFindReplace,
 });
 
-/** Searches the active tab's data cells (not headers) case-insensitively. */
-function runFind(query: string): void {
-  findQuery = query;
-  findMatches = [];
-  findIndex = -1;
+/** Persists replacement text as the user types it, independent of actually firing a replace —
+ * otherwise switching tabs before hitting Enter/Replace would silently drop it. */
+function setReplacementText(replacement: string): void {
   const tab = getActiveTab();
-  if (!tab || !query) {
-    findBar.setMatchStatus(0, 0);
-    return;
-  }
+  if (tab) tab.find.replacement = replacement;
+}
+
+/** Searches `data`'s data cells (not headers) case-insensitively. */
+function computeMatches(data: DataModel, query: string): FindMatch[] {
+  const matches: FindMatch[] = [];
+  if (!query) return matches;
   const needle = query.toLowerCase();
-  for (let r = 0; r < tab.data.rows.length; r++) {
-    for (let c = 0; c < tab.data.headers.length; c++) {
-      if ((tab.data.rows[r][c] ?? '').toLowerCase().includes(needle)) {
-        findMatches.push({ row: r, col: c });
+  for (let r = 0; r < data.rows.length; r++) {
+    for (let c = 0; c < data.headers.length; c++) {
+      if ((data.rows[r][c] ?? '').toLowerCase().includes(needle)) {
+        matches.push({ row: r, col: c });
       }
     }
   }
-  if (findMatches.length > 0) {
-    findIndex = 0;
-    jumpToFindMatch();
-  } else {
-    findBar.setMatchStatus(0, 0);
+  return matches;
+}
+
+/** Re-renders the find bar from the active tab's own find state — the one place that pushes
+ * state to the view, so restoring a different tab's session on switch is just calling this. */
+function syncFindBar(): void {
+  const find = getActiveTab()?.find;
+  findBar.render({
+    open: !!find?.open,
+    query: find?.query ?? '',
+    replacement: find?.replacement ?? '',
+    replaceOpen: !!find?.replaceOpen,
+    matchCurrent: find && find.matchIndex >= 0 ? find.matchIndex + 1 : 0,
+    matchTotal: find?.open ? findMatches.length : 0,
+  });
+}
+
+function runFind(query: string): void {
+  const tab = getActiveTab();
+  if (!tab) return;
+  tab.find.query = query;
+  findMatches = computeMatches(tab.data, query);
+  tab.find.matchIndex = findMatches.length > 0 ? 0 : -1;
+  syncFindBar();
+  if (tab.find.matchIndex >= 0) jumpToFindMatch();
+}
+
+/** Escapes query so it's matched as a literal substring, consistent with computeMatches's .includes(). */
+function escapeForRegExp(query: string): string {
+  return query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function replaceInCell(current: string, query: string, replacement: string): string {
+  return current.replace(new RegExp(escapeForRegExp(query), 'gi'), replacement);
+}
+
+/** Replaces just the currently-selected match, then advances to whatever now occupies its slot. */
+function findReplace(replacement: string): void {
+  const tab = getActiveTab();
+  if (!tab) return;
+  tab.find.replacement = replacement;
+  if (tab.find.matchIndex < 0 || !findMatches[tab.find.matchIndex]) {
+    syncFindBar();
+    return;
   }
+  const match = findMatches[tab.find.matchIndex];
+  const current = tab.data.rows[match.row]?.[match.col] ?? '';
+  const next = replaceInCell(current, tab.find.query, replacement);
+  const mutation = setCell(tab.data, match.row, match.col, next);
+  commitMutation(mutation.data, mutation.diff);
+  const refreshed = getActiveTab()!;
+  findMatches = computeMatches(refreshed.data, refreshed.find.query);
+  refreshed.find.matchIndex = findMatches.length > 0 ? refreshed.find.matchIndex % findMatches.length : -1;
+  syncFindBar();
+  if (refreshed.find.matchIndex >= 0) jumpToFindMatch();
+}
+
+/** Replaces every current match in one undo step, same pattern as handleBulkEdit/clearSelectedCells. */
+function findReplaceAll(replacement: string): void {
+  const tab = getActiveTab();
+  if (!tab) return;
+  tab.find.replacement = replacement;
+  if (findMatches.length === 0) {
+    syncFindBar();
+    return;
+  }
+  let data = tab.data;
+  const diffs: Diff[] = [];
+  for (const match of findMatches) {
+    const current = data.rows[match.row]?.[match.col] ?? '';
+    const next = replaceInCell(current, tab.find.query, replacement);
+    if (next === current) continue;
+    const mutation = setCell(data, match.row, match.col, next);
+    data = mutation.data;
+    diffs.push(mutation.diff);
+  }
+  if (diffs.length === 0) {
+    syncFindBar();
+    return;
+  }
+  commitMutation(data, diffs);
+  const refreshed = getActiveTab()!;
+  findMatches = computeMatches(refreshed.data, refreshed.find.query);
+  refreshed.find.matchIndex = findMatches.length > 0 ? 0 : -1;
+  syncFindBar();
+  if (refreshed.find.matchIndex >= 0) jumpToFindMatch();
 }
 
 function jumpToFindMatch(): void {
-  const match = findMatches[findIndex];
+  const tab = getActiveTab();
+  if (!tab || tab.find.matchIndex < 0) return;
+  const match = findMatches[tab.find.matchIndex];
   if (!match) return;
   grid.selectCell(match.row, match.col);
-  findBar.setMatchStatus(findIndex + 1, findMatches.length);
 }
 
 function findNext(): void {
-  if (findMatches.length === 0) return;
-  findIndex = (findIndex + 1) % findMatches.length;
+  const tab = getActiveTab();
+  if (!tab || findMatches.length === 0) return;
+  tab.find.matchIndex = (tab.find.matchIndex + 1) % findMatches.length;
   jumpToFindMatch();
+  syncFindBar();
 }
 
 function findPrev(): void {
-  if (findMatches.length === 0) return;
-  findIndex = (findIndex - 1 + findMatches.length) % findMatches.length;
+  const tab = getActiveTab();
+  if (!tab || findMatches.length === 0) return;
+  tab.find.matchIndex = (tab.find.matchIndex - 1 + findMatches.length) % findMatches.length;
   jumpToFindMatch();
+  syncFindBar();
 }
 
-function openFind(): void {
-  if (!getActiveTab()) return;
-  findBar.show();
-  findBar.focusInput();
-  if (findQuery) runFind(findQuery);
+function toggleFindReplace(): void {
+  const tab = getActiveTab();
+  if (!tab) return;
+  tab.find.replaceOpen = !tab.find.replaceOpen;
+  syncFindBar();
+  if (tab.find.replaceOpen) findBar.focusReplacement();
+}
+
+function openFind(withReplace = false): void {
+  const tab = getActiveTab();
+  if (!tab) return;
+  tab.find.open = true;
+  if (withReplace) tab.find.replaceOpen = true;
+  runFind(tab.find.query);
+  if (withReplace) findBar.focusReplacement();
+  else findBar.focusQuery();
 }
 
 function closeFind(): void {
-  findBar.hide();
+  const tab = getActiveTab();
+  if (tab) tab.find.open = false;
   findMatches = [];
-  findIndex = -1;
+  syncFindBar();
   grid.focus();
 }
 
@@ -321,7 +439,7 @@ async function reopenRecentFile(entry: RecentFileEntry): Promise<void> {
       return;
     }
     const data = createDataModel(draft.headers, draft.rows, draft.filename, draft.delimiter);
-    tabs.push({ id: entry.id, data, handle: null, fileType: draft.fileType, dirty: true, history: createHistory() });
+    tabs.push({ id: entry.id, data, handle: null, fileType: draft.fileType, dirty: true, history: createHistory(), find: createFindState() });
     activateTab(entry.id);
     return;
   }
@@ -342,6 +460,7 @@ async function reopenRecentFile(entry: RecentFileEntry): Promise<void> {
           fileType: parsed.type,
           dirty: false,
           history: createHistory(),
+          find: createFindState(),
         };
         tabs.push(tab);
         activateTab(tab.id);
@@ -362,7 +481,20 @@ function activateTab(id: string): void {
   grid.setData(tab.data);
   showGrid();
   updateStatus();
-  if (findBar.isOpen()) runFind(findQuery);
+  // Restore this tab's own find session rather than re-running whatever was last typed
+  // elsewhere — find state is per-tab, see TabFindState.
+  if (tab.find.open) {
+    findMatches = computeMatches(tab.data, tab.find.query);
+    if (findMatches.length === 0) {
+      tab.find.matchIndex = -1;
+    } else if (tab.find.matchIndex < 0 || tab.find.matchIndex >= findMatches.length) {
+      tab.find.matchIndex = 0;
+    }
+  } else {
+    findMatches = [];
+  }
+  syncFindBar();
+  if (tab.find.open && tab.find.matchIndex >= 0) jumpToFindMatch();
 }
 
 // --- reconnect-tab feature (retry #2, 2026-07-17/18) — see STATUS.md for revert instructions ---
@@ -525,6 +657,7 @@ function loadFile(opened: OpenedFile): void {
     fileType: parsed.type,
     dirty: false,
     history: createHistory(),
+    find: createFindState(),
   };
   tabs.push(tab);
   activateTab(tab.id);
@@ -539,6 +672,7 @@ function newFile(): void {
     fileType: 'csv',
     dirty: true,
     history: createHistory(),
+    find: createFindState(),
   };
   tabs.push(tab);
   activateTab(tab.id);
@@ -864,6 +998,9 @@ window.addEventListener('keydown', (e) => {
     // could only ever see whatever rows happen to be rendered near the current scroll position.
     e.preventDefault();
     openFind();
+  } else if (key === 'h') {
+    e.preventDefault();
+    openFind(true);
   }
 });
 
@@ -877,7 +1014,7 @@ async function restoreSession(): Promise<void> {
       if (!draft) continue;
       const data = createDataModel(draft.headers, draft.rows, draft.filename, draft.delimiter);
       if (!hasContent(data)) continue;
-      tabs.push({ id: ref.id, data, handle: null, fileType: draft.fileType, dirty: true, history: createHistory() });
+      tabs.push({ id: ref.id, data, handle: null, fileType: draft.fileType, dirty: true, history: createHistory(), find: createFindState() });
       continue;
     }
 
@@ -898,6 +1035,7 @@ async function restoreSession(): Promise<void> {
           fileType: ref.fileType,
           dirty: false,
           history: createHistory(),
+          find: createFindState(),
           needsReconnect: true,
         });
         continue;
@@ -912,6 +1050,7 @@ async function restoreSession(): Promise<void> {
         fileType: parsed.type,
         dirty: false,
         history: createHistory(),
+        find: createFindState(),
       });
     } catch {
       continue;
