@@ -30,6 +30,7 @@ export interface CellEdit {
 
 export interface GridOptions {
   onCellEdit: (row: number, col: number, value: string) => void;
+  onHeaderEdit: (col: number, value: string) => void;
   /**
    * Fired once for a multi-cell operation (paste, Delete/Backspace-clear) instead of calling
    * onCellEdit per cell — lets the caller record it as a single undo step rather than one per
@@ -59,10 +60,14 @@ export class Grid {
   private active: CellPos | null = null;
   private editing: CellPos | null = null;
   private activeInputEl: HTMLInputElement | null = null;
+  private editingHeader: number | null = null;
+  private activeHeaderInputEl: HTMLInputElement | null = null;
   private dragging = false;
   private rafHandle: number | null = null;
   private lastClickTime = 0;
   private lastClickPos: CellPos | null = null;
+  private lastHeaderClickTime = 0;
+  private lastHeaderClickCol: number | null = null;
 
   constructor(container: HTMLElement, options: GridOptions) {
     this.container = container;
@@ -102,6 +107,9 @@ export class Grid {
     this.scrollEl.addEventListener('keydown', this.handleKeyDown);
     this.scrollEl.addEventListener('mousedown', this.handleMouseDown);
     this.scrollEl.addEventListener('contextmenu', this.handleContextMenu);
+    // Separate from handleMouseDown: headers aren't part of the cell-selection/range-drag model,
+    // so a dedicated handler is simpler than threading a header branch through that one.
+    this.headerCellsEl.addEventListener('mousedown', this.handleHeaderMouseDown);
     // Not a native 'dblclick' listener: handleMouseDown does a synchronous full re-render on
     // every click (replacing the cell's DOM node), and Chromium's native double-click detection
     // requires the *same* node across both clicks — so dblclick silently never fires here.
@@ -178,6 +186,7 @@ export class Grid {
    */
   commitPendingEdit(): void {
     this.commitEdit();
+    this.commitHeaderEdit();
   }
 
   destroy(): void {
@@ -185,6 +194,7 @@ export class Grid {
     this.scrollEl.removeEventListener('keydown', this.handleKeyDown);
     this.scrollEl.removeEventListener('mousedown', this.handleMouseDown);
     this.scrollEl.removeEventListener('contextmenu', this.handleContextMenu);
+    this.headerCellsEl.removeEventListener('mousedown', this.handleHeaderMouseDown);
     document.removeEventListener('copy', this.handleCopy);
     document.removeEventListener('cut', this.handleCut);
     document.removeEventListener('paste', this.handlePaste);
@@ -262,7 +272,19 @@ export class Grid {
       cell.style.left = `${GUTTER_WIDTH + c * COL_WIDTH}px`;
       cell.style.width = `${COL_WIDTH}px`;
       cell.dataset.col = String(c);
-      cell.textContent = this.data.headers[c] ?? '';
+
+      if (this.editingHeader === c) {
+        const input = document.createElement('input');
+        input.className = 'grid-header-cell-input';
+        input.value = this.data.headers[c] ?? '';
+        input.addEventListener('keydown', this.handleHeaderInputKeyDown);
+        input.addEventListener('blur', this.handleHeaderInputBlur);
+        cell.appendChild(input);
+        this.activeHeaderInputEl = input;
+      } else {
+        cell.textContent = this.data.headers[c] ?? '';
+      }
+
       this.headerCellsEl.appendChild(cell);
     }
   }
@@ -366,6 +388,7 @@ export class Grid {
   private startEdit(row: number, col: number, seed?: string): void {
     if (row < 0 || row >= this.data.rows.length || col < 0 || col >= this.data.headers.length) return;
     this.commitEdit();
+    this.commitHeaderEdit();
     this.editing = { row, col };
     // Render immediately (not via rAF) so the input exists synchronously below —
     // deferring this raced with fast keystrokes and dropped seeded characters.
@@ -395,6 +418,43 @@ export class Grid {
   private cancelEdit(): void {
     this.editing = null;
     this.activeInputEl = null;
+    this.renderNow();
+    this.scrollEl.focus();
+  }
+
+  /** Mirrors startEdit/commitEdit/cancelEdit for header cells — a parallel, not shared, state
+   * machine since header edits have no row and report through a separate onHeaderEdit callback. */
+  private startHeaderEdit(col: number, seed?: string): void {
+    if (col < 0 || col >= this.data.headers.length) return;
+    this.commitEdit();
+    this.commitHeaderEdit();
+    this.editingHeader = col;
+    this.renderNow();
+    const input = this.activeHeaderInputEl;
+    if (!input) return;
+    if (seed !== undefined) {
+      input.value = seed;
+      input.focus();
+      input.setSelectionRange(seed.length, seed.length);
+    } else {
+      input.focus();
+      input.select();
+    }
+  }
+
+  private commitHeaderEdit(): void {
+    if (this.editingHeader === null) return;
+    const col = this.editingHeader;
+    const input = this.activeHeaderInputEl;
+    this.editingHeader = null;
+    this.activeHeaderInputEl = null;
+    if (input) this.options.onHeaderEdit(col, input.value);
+    this.renderNow();
+  }
+
+  private cancelHeaderEdit(): void {
+    this.editingHeader = null;
+    this.activeHeaderInputEl = null;
     this.renderNow();
     this.scrollEl.focus();
   }
@@ -474,6 +534,28 @@ export class Grid {
     document.addEventListener('mouseup', onUp);
   };
 
+  /** Double-click detection mirrors handleMouseDown's (time + position, not native dblclick —
+   * renderHeader() replaces every header cell's DOM node on each render, same reason native
+   * dblclick doesn't fire for data cells either). A single click is left as a no-op: clicking a
+   * non-focusable header div still blurs whatever cell/header input was focused, which already
+   * commits it via the input's own blur handler — no explicit commit needed here for that case. */
+  private handleHeaderMouseDown = (event: MouseEvent): void => {
+    if (event.button !== 0) return;
+    const target = (event.target as HTMLElement).closest<HTMLElement>('.grid-header-cell');
+    if (!target) return;
+    const col = Number(target.dataset.col);
+
+    const now = Date.now();
+    const isDoubleClick = this.lastHeaderClickCol === col && now - this.lastHeaderClickTime < DOUBLE_CLICK_MS;
+    this.lastHeaderClickTime = now;
+    this.lastHeaderClickCol = col;
+
+    if (isDoubleClick) {
+      event.preventDefault();
+      this.startHeaderEdit(col);
+    }
+  };
+
   private handleContextMenu = (event: MouseEvent): void => {
     const el = event.target as HTMLElement;
     const cell = el.closest<HTMLElement>('.grid-cell');
@@ -506,11 +588,13 @@ export class Grid {
   };
 
   private handleKeyDown = (event: KeyboardEvent): void => {
-    // While editing, the input's own keydown listener owns Enter/Tab/Escape and the
-    // browser handles everything else natively. Without this guard, those keydown
-    // events bubble from the input (a descendant of scrollEl) right back into this
-    // handler and get processed a second time at the grid level.
-    if (this.editing) return;
+    // While editing (a cell or a header), the input's own keydown listener owns
+    // Enter/Tab/Escape and the browser handles everything else natively. Without this guard,
+    // those keydown events bubble from the input (a descendant of scrollEl) right back into
+    // this handler and get processed a second time at the grid level — e.g. Ctrl+A while
+    // renaming a header would otherwise also trigger the grid's own select-all-cells handling,
+    // which re-renders and tears out the focused header input mid-edit.
+    if (this.editing || this.editingHeader !== null) return;
     if (!this.active) return;
     const ctrlOrCmd = event.ctrlKey || event.metaKey;
 
@@ -580,6 +664,32 @@ export class Grid {
     this.commitEdit();
   };
 
+  private handleHeaderInputKeyDown = (event: KeyboardEvent): void => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      event.stopPropagation();
+      this.commitHeaderEdit();
+      this.scrollEl.focus();
+    } else if (event.key === 'Tab') {
+      event.preventDefault();
+      event.stopPropagation();
+      const col = this.editingHeader;
+      this.commitHeaderEdit();
+      if (col !== null) {
+        const nextCol = clamp(col + (event.shiftKey ? -1 : 1), 0, this.data.headers.length - 1);
+        this.startHeaderEdit(nextCol);
+      }
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      this.cancelHeaderEdit();
+    }
+  };
+
+  private handleHeaderInputBlur = (): void => {
+    this.commitHeaderEdit();
+  };
+
   /**
    * Scoped to the app's own cell selection (TSV, spreadsheet-interop format) rather than relying
    * on the browser's native text selection — with `user-select: none` on the grid (see style.css)
@@ -625,7 +735,9 @@ export class Grid {
     this.clearSelection();
   };
 
-  /** Applies TSV/plain text starting at the active cell, clipped to the sheet's current bounds. */
+  /** Applies TSV/plain text starting at the active cell. Not clipped to current bounds — a
+   * paste that overflows the sheet is reported as-is (edits can reference out-of-range rows/
+   * columns); the caller (main.ts's handleBulkEdit) grows the sheet to fit before applying. */
   private applyPastedText(text: string): void {
     if (!this.active || !text) return;
     const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
@@ -635,11 +747,8 @@ export class Grid {
     const edits: CellEdit[] = [];
     for (let i = 0; i < pasted.length; i++) {
       const targetRow = startRow + i;
-      if (targetRow >= this.data.rows.length) break;
       for (let j = 0; j < pasted[i].length; j++) {
-        const targetCol = startCol + j;
-        if (targetCol >= this.data.headers.length) break;
-        edits.push({ row: targetRow, col: targetCol, value: pasted[i][j] });
+        edits.push({ row: targetRow, col: startCol + j, value: pasted[i][j] });
       }
     }
     this.emitBulkEdit(edits);

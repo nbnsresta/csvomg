@@ -7,9 +7,12 @@ import {
   hasContent,
   insertColumn,
   insertRow,
+  nextColumnLetter,
+  normalizeTrailingBuffer,
   renameColumn,
   reorderColumn,
   setCell,
+  trimTrailingBlank,
 } from './core/data.ts';
 import { createHistory, pushGroup, redo, undo, type History } from './core/history.ts';
 import { parseCSV, parseJSON, serializeCSV, serializeJSON } from './core/parser.ts';
@@ -129,6 +132,7 @@ function persistSession(): void {
 
 const grid = new Grid(gridContainer, {
   onCellEdit: handleCellEdit,
+  onHeaderEdit: handleHeaderEdit,
   onBulkEdit: handleBulkEdit,
   onSelectionChange: updateSelectionStatus,
   onContextMenu: handleContextMenu,
@@ -348,10 +352,11 @@ async function reconnectFileHandle(handle: FileSystemFileHandle): Promise<{ data
   return parseOpenedFile(opened);
 }
 
+/** Never mutates tab.data — only the bytes written out are trimmed, so the live grid keeps its
+ * running buffer of blank trailing rows/columns untouched. */
 function serializeTab(tab: DocTab): string {
-  return tab.fileType === 'json'
-    ? serializeJSON(tab.data.headers, tab.data.rows)
-    : serializeCSV(tab.data.headers, tab.data.rows, tab.data.meta.delimiter);
+  const data = trimTrailingBlank(tab.data);
+  return tab.fileType === 'json' ? serializeJSON(data.headers, data.rows) : serializeCSV(data.headers, data.rows, data.meta.delimiter);
 }
 
 function showGrid(): void {
@@ -438,7 +443,7 @@ async function reopenRecentFile(entry: RecentFileEntry): Promise<void> {
       await refreshRecentFilesUI();
       return;
     }
-    const data = createDataModel(draft.headers, draft.rows, draft.filename, draft.delimiter);
+    const data = normalizeTrailingBuffer(createDataModel(draft.headers, draft.rows, draft.filename, draft.delimiter)).data;
     tabs.push({ id: entry.id, data, handle: null, fileType: draft.fileType, dirty: true, history: createHistory(), find: createFindState() });
     activateTab(entry.id);
     return;
@@ -455,7 +460,7 @@ async function reopenRecentFile(entry: RecentFileEntry): Promise<void> {
         const parsed = await reconnectFileHandle(handle);
         const tab: DocTab = {
           id: crypto.randomUUID(),
-          data: parsed.data,
+          data: normalizeTrailingBuffer(parsed.data).data,
           handle,
           fileType: parsed.type,
           dirty: false,
@@ -516,7 +521,7 @@ function reconnectTab(id: string): void {
       renderTabs();
       try {
         const parsed = await reconnectFileHandle(handle);
-        tab.data = parsed.data;
+        tab.data = normalizeTrailingBuffer(parsed.data).data;
         tab.fileType = parsed.type;
         tab.needsReconnect = false;
         activateTab(id);
@@ -652,7 +657,7 @@ function loadFile(opened: OpenedFile): void {
   }
   const tab: DocTab = {
     id: crypto.randomUUID(),
-    data: parsed.data,
+    data: normalizeTrailingBuffer(parsed.data).data,
     handle: opened.handle,
     fileType: parsed.type,
     dirty: false,
@@ -667,7 +672,7 @@ function newFile(): void {
   if (!canOpenNewTab()) return;
   const tab: DocTab = {
     id: crypto.randomUUID(),
-    data: createDataModel(['A', 'B', 'C'], [['', '', '']], nextUntitledName(), ','),
+    data: normalizeTrailingBuffer(createDataModel([], [], nextUntitledName(), ',')).data,
     handle: null,
     fileType: 'csv',
     dirty: true,
@@ -694,13 +699,17 @@ function applyTabUpdate(tab: DocTab, data: DataModel): void {
  * Commits a new DataModel from any mutation (cell edit, row/column action, clear, ...) and
  * records it as one undo step. A single mutation passes one Diff; an operation that touches
  * several cells at once (e.g. clearing a range) passes all of them as an array so the whole
- * thing undoes in one step rather than cell-by-cell.
+ * thing undoes in one step rather than cell-by-cell. Also re-balances the running buffer of
+ * blank trailing rows/columns (see normalizeTrailingBuffer) and folds that into the same undo
+ * step, so every mutation path in the app gets it for free without its own call site changes.
  */
 function commitMutation(data: DataModel, diff: Diff | Diff[]): void {
   const tab = getActiveTab();
   if (!tab) return;
-  tab.history = pushGroup(tab.history, Array.isArray(diff) ? diff : [diff]);
-  applyTabUpdate(tab, data);
+  const diffs = Array.isArray(diff) ? diff : [diff];
+  const normalized = normalizeTrailingBuffer(data);
+  tab.history = pushGroup(tab.history, [...diffs, ...normalized.diffs]);
+  applyTabUpdate(tab, normalized.data);
 }
 
 function performUndo(): void {
@@ -721,6 +730,13 @@ function performRedo(): void {
   applyTabUpdate(tab, result.data);
 }
 
+function handleHeaderEdit(col: number, value: string): void {
+  const tab = getActiveTab();
+  if (!tab || tab.data.headers[col] === value) return;
+  const mutation = renameColumn(tab.data, col, value);
+  commitMutation(mutation.data, mutation.diff);
+}
+
 function handleCellEdit(row: number, col: number, value: string): void {
   const tab = getActiveTab();
   if (!tab) return;
@@ -729,12 +745,27 @@ function handleCellEdit(row: number, col: number, value: string): void {
   commitMutation(mutation.data, mutation.diff);
 }
 
-/** A multi-cell operation (paste, Delete/Backspace-clear) — recorded as a single undo step. */
+/** A multi-cell operation (paste, Delete/Backspace-clear) — recorded as a single undo step.
+ * Paste can target cells beyond the sheet's current bounds (grid.ts no longer clips it, see
+ * applyPastedText) — grown first so the whole pasted block lands. Delete/Backspace-clear's
+ * edits are always already in-bounds, so these loops are no-ops on that path. */
 function handleBulkEdit(edits: CellEdit[]): void {
   const tab = getActiveTab();
   if (!tab) return;
   let data = tab.data;
   const diffs: Diff[] = [];
+  const maxRow = Math.max(-1, ...edits.map((e) => e.row));
+  const maxCol = Math.max(-1, ...edits.map((e) => e.col));
+  while (data.rows.length <= maxRow) {
+    const m = insertRow(data, data.rows.length);
+    data = m.data;
+    diffs.push(m.diff);
+  }
+  while (data.headers.length <= maxCol) {
+    const m = insertColumn(data, data.headers.length, nextColumnLetter(data.headers.length));
+    data = m.data;
+    diffs.push(m.diff);
+  }
   for (const edit of edits) {
     if ((data.rows[edit.row]?.[edit.col] ?? '') === edit.value) continue;
     const mutation = setCell(data, edit.row, edit.col, edit.value);
@@ -1012,8 +1043,9 @@ async function restoreSession(): Promise<void> {
     if (ref.kind === 'draft') {
       const draft = await loadDraft(ref.id).catch(() => null);
       if (!draft) continue;
-      const data = createDataModel(draft.headers, draft.rows, draft.filename, draft.delimiter);
-      if (!hasContent(data)) continue;
+      const rawData = createDataModel(draft.headers, draft.rows, draft.filename, draft.delimiter);
+      if (!hasContent(rawData)) continue;
+      const data = normalizeTrailingBuffer(rawData).data;
       tabs.push({ id: ref.id, data, handle: null, fileType: draft.fileType, dirty: true, history: createHistory(), find: createFindState() });
       continue;
     }
@@ -1045,7 +1077,7 @@ async function restoreSession(): Promise<void> {
       const parsed = parseOpenedFile(opened);
       tabs.push({
         id: ref.id,
-        data: parsed.data,
+        data: normalizeTrailingBuffer(parsed.data).data,
         handle,
         fileType: parsed.type,
         dirty: false,

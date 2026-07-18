@@ -9,9 +9,12 @@ import {
   insertColumn,
   insertRow,
   invertDiff,
+  nextColumnLetter,
+  normalizeTrailingBuffer,
   renameColumn,
   reorderColumn,
   setCell,
+  trimTrailingBlank,
   undoDiff,
 } from '../src/core/data.ts';
 import type { DataModel } from '../src/types/index.ts';
@@ -164,5 +167,142 @@ describe('hasContent', () => {
 
   it('is true as soon as any cell has non-whitespace content', () => {
     expect(hasContent(sample())).toBe(true);
+  });
+});
+
+describe('nextColumnLetter', () => {
+  it('produces A-Z then wraps into AA, AB, ...', () => {
+    expect(nextColumnLetter(0)).toBe('A');
+    expect(nextColumnLetter(25)).toBe('Z');
+    expect(nextColumnLetter(26)).toBe('AA');
+    expect(nextColumnLetter(27)).toBe('AB');
+    expect(nextColumnLetter(51)).toBe('AZ');
+    expect(nextColumnLetter(52)).toBe('BA');
+  });
+});
+
+describe('normalizeTrailingBuffer', () => {
+  it('grows a fully empty (0x0) model up to the 2x2 buffer', () => {
+    const blank = createDataModel([], [], 'Untitled.csv');
+    const { data, diffs } = normalizeTrailingBuffer(blank);
+    expect(data.headers).toEqual(['A', 'B']);
+    expect(data.rows).toEqual([
+      ['', ''],
+      ['', ''],
+    ]);
+    expect(diffs.length).toBeGreaterThan(0);
+  });
+
+  it('is a no-op once already balanced at exactly 2 trailing blank rows/columns', () => {
+    const balanced = createDataModel(
+      ['A', 'B'],
+      [
+        ['', ''],
+        ['', ''],
+      ],
+      'test.csv',
+    );
+    const { data, diffs } = normalizeTrailingBuffer(balanced);
+    expect(data).toEqual(balanced);
+    expect(diffs).toEqual([]);
+  });
+
+  it('grows exactly one more column once the left (first) buffer column gets content, keeping the right one', () => {
+    // C is the buffer column that was just typed into; D is still the untouched second buffer
+    // column, so only one new trailing column (E) is needed to restore a 2-column buffer.
+    const data0 = createDataModel(
+      ['A', 'B', 'C', 'D'],
+      [
+        ['x', 'y', 'z', ''],
+        ['', '', '', ''],
+        ['', '', '', ''],
+      ],
+      'test.csv',
+    );
+    const { data } = normalizeTrailingBuffer(data0);
+    expect(data.headers).toEqual(['A', 'B', 'C', 'D', 'E']);
+    expect(data.rows).toEqual([
+      ['x', 'y', 'z', '', ''],
+      ['', '', '', '', ''],
+      ['', '', '', '', ''],
+    ]);
+  });
+
+  it('shrinks back down to exactly 2 trailing blank rows/columns once extras appear', () => {
+    // Only D is genuinely surplus (B, C already form the correct 2-column buffer to A's data).
+    const overGrown = createDataModel(
+      ['A', 'B', 'C', 'D'],
+      [
+        ['x', '', '', ''],
+        ['', '', '', ''],
+        ['', '', '', ''],
+        ['', '', '', ''],
+      ],
+      'test.csv',
+    );
+    const { data } = normalizeTrailingBuffer(overGrown);
+    expect(data.headers).toEqual(['A', 'B', 'C']);
+    expect(data.rows).toEqual([
+      ['x', '', ''],
+      ['', '', ''],
+      ['', '', ''],
+    ]);
+  });
+
+  it('never shrinks a fully-blank model below the 2x2 floor', () => {
+    const allBlank = createDataModel(
+      ['A', 'B', 'C'],
+      [
+        ['', '', ''],
+        ['', '', ''],
+        ['', '', ''],
+      ],
+      'test.csv',
+    );
+    const { data } = normalizeTrailingBuffer(allBlank);
+    expect(data.headers).toEqual(['A', 'B']);
+    expect(data.rows).toEqual([
+      ['', ''],
+      ['', ''],
+    ]);
+  });
+
+  it('diffs round-trip back to the original via undoDiff, applied in reverse order', () => {
+    const original = createDataModel(['A'], [['x']], 'test.csv');
+    const { data, diffs } = normalizeTrailingBuffer(original);
+    let restored = data;
+    for (let i = diffs.length - 1; i >= 0; i--) {
+      restored = undoDiff(restored, diffs[i]);
+    }
+    expect(restored).toEqual(original);
+  });
+});
+
+describe('trimTrailingBlank', () => {
+  it('strips buffer padding down to zero, unlike normalizeTrailingBuffer which keeps 2x2', () => {
+    const padded = createDataModel(
+      ['A', 'B', 'C'],
+      [
+        ['x', 'y', ''],
+        ['', '', ''],
+        ['', '', ''],
+      ],
+      'test.csv',
+    );
+    const trimmed = trimTrailingBlank(padded);
+    expect(trimmed.headers).toEqual(['A', 'B']);
+    expect(trimmed.rows).toEqual([['x', 'y']]);
+  });
+
+  it('does not mutate the input', () => {
+    const padded = createDataModel(['A', 'B'], [['x', ''], ['', '']], 'test.csv');
+    const before = structuredClone(padded);
+    trimTrailingBlank(padded);
+    expect(padded).toEqual(before);
+  });
+
+  it('is a no-op when there is no trailing blank padding', () => {
+    const tight = createDataModel(['A', 'B'], [['x', 'y']], 'test.csv');
+    expect(trimTrailingBlank(tight)).toEqual(tight);
   });
 });

@@ -109,6 +109,98 @@ export function reorderColumn(data: DataModel, from: number, to: number): Mutati
   };
 }
 
+export const BUFFER_ROWS = 2;
+export const BUFFER_COLS = 2;
+
+/** 0->A, 25->Z, 26->AA, ... — same convention newFile()'s original ['A','B','C'] headers used. */
+export function nextColumnLetter(index: number): string {
+  let n = index;
+  let name = '';
+  do {
+    name = String.fromCharCode(65 + (n % 26)) + name;
+    n = Math.floor(n / 26) - 1;
+  } while (n >= 0);
+  return name;
+}
+
+function isRowEmpty(row: string[]): boolean {
+  return row.every((cell) => cell.trim() === '');
+}
+
+function isColumnEmpty(data: DataModel, col: number): boolean {
+  return data.rows.every((row) => (row[col] ?? '').trim() === '');
+}
+
+function countTrailingEmptyColumns(data: DataModel): number {
+  let count = 0;
+  for (let c = data.headers.length - 1; c >= 0 && isColumnEmpty(data, c); c--) count++;
+  return count;
+}
+
+function countTrailingEmptyRows(data: DataModel): number {
+  let count = 0;
+  for (let r = data.rows.length - 1; r >= 0 && isRowEmpty(data.rows[r]); r--) count++;
+  return count;
+}
+
+/**
+ * Ensures exactly BUFFER_ROWS trailing blank rows and BUFFER_COLS trailing blank columns,
+ * growing or trimming as needed. "Blank" mirrors hasContent()'s convention (trim + non-empty
+ * check) but per-row/per-column instead of whole-model; header text is not considered, only
+ * cell content. Returns the adjusted data plus whatever diffs produced it (empty if already
+ * balanced), so callers fold this into an existing undo group instead of it being its own step.
+ */
+export function normalizeTrailingBuffer(data: DataModel): { data: DataModel; diffs: Diff[] } {
+  let current = data;
+  const diffs: Diff[] = [];
+
+  const trailingEmptyCols = countTrailingEmptyColumns(current);
+  if (trailingEmptyCols < BUFFER_COLS) {
+    for (let i = trailingEmptyCols; i < BUFFER_COLS; i++) {
+      const m = insertColumn(current, current.headers.length, nextColumnLetter(current.headers.length));
+      current = m.data;
+      diffs.push(m.diff);
+    }
+  } else if (trailingEmptyCols > BUFFER_COLS) {
+    for (let i = 0; i < trailingEmptyCols - BUFFER_COLS; i++) {
+      const m = deleteColumn(current, current.headers.length - 1);
+      current = m.data;
+      diffs.push(m.diff);
+    }
+  }
+
+  const trailingEmptyRows = countTrailingEmptyRows(current);
+  if (trailingEmptyRows < BUFFER_ROWS) {
+    for (let i = trailingEmptyRows; i < BUFFER_ROWS; i++) {
+      const m = insertRow(current, current.rows.length);
+      current = m.data;
+      diffs.push(m.diff);
+    }
+  } else if (trailingEmptyRows > BUFFER_ROWS) {
+    for (let i = 0; i < trailingEmptyRows - BUFFER_ROWS; i++) {
+      const m = deleteRow(current, current.rows.length - 1);
+      current = m.data;
+      diffs.push(m.diff);
+    }
+  }
+
+  return { data: current, diffs };
+}
+
+/** Strips all fully-blank trailing rows/columns (down to zero, not BUFFER_ROWS/BUFFER_COLS) —
+ * for save-time output, so a saved file never carries live-editing buffer padding. Never mutates
+ * `data`; the caller's in-memory tab keeps its buffer untouched. */
+export function trimTrailingBlank(data: DataModel): DataModel {
+  let current = data;
+  for (let c = current.headers.length - 1; c >= 0 && isColumnEmpty(current, c); c--) {
+    current = deleteColumn(current, c).data;
+  }
+  for (let r = current.rows.length - 1; r >= 0 && isRowEmpty(current.rows[r]); r--) {
+    current = deleteRow(current, r).data;
+  }
+  return current;
+}
+
 /** Applies a diff (forward) to a data model. Used to replay redo steps. */
 export function applyDiff(data: DataModel, diff: Diff): DataModel {
   switch (diff.type) {
