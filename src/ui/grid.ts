@@ -1,4 +1,6 @@
 import type { DataModel, Selection } from '../types/index.ts';
+import plusIcon from '../icons/plus.svg?raw';
+import { createIcon } from '../utils/icons.ts';
 
 // Mirrors the --row-height / --header-height / --gutter-width tokens in style.css.
 const ROW_HEIGHT = 28;
@@ -7,6 +9,8 @@ const GUTTER_WIDTH = 48;
 const COL_WIDTH = 140;
 const OVERSCAN = 4;
 const DOUBLE_CLICK_MS = 400;
+// Hover "+" hit-zone straddling a boundary between two headers/gutter cells.
+const INSERT_ZONE_SIZE = 12;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -31,6 +35,9 @@ export interface CellEdit {
 export interface GridOptions {
   onCellEdit: (row: number, col: number, value: string) => void;
   onHeaderEdit: (col: number, value: string) => void;
+  /** Hover "+" between two column headers / two gutter cells — inserts before the given index. */
+  onInsertColumn: (col: number) => void;
+  onInsertRow: (row: number) => void;
   /**
    * Fired once for a multi-cell operation (paste, Delete/Backspace-clear) instead of calling
    * onCellEdit per cell — lets the caller record it as a single undo step rather than one per
@@ -110,6 +117,10 @@ export class Grid {
     // Separate from handleMouseDown: headers aren't part of the cell-selection/range-drag model,
     // so a dedicated handler is simpler than threading a header branch through that one.
     this.headerCellsEl.addEventListener('mousedown', this.handleHeaderMouseDown);
+    // Delegated, not per-zone: zone divs are rebuilt on every render along with the header/gutter
+    // cells themselves, so a single listener on the stable parent avoids re-attaching per render.
+    this.headerCellsEl.addEventListener('click', this.handleInsertColClick);
+    this.gutterWrap.addEventListener('click', this.handleInsertRowClick);
     // Not a native 'dblclick' listener: handleMouseDown does a synchronous full re-render on
     // every click (replacing the cell's DOM node), and Chromium's native double-click detection
     // requires the *same* node across both clicks — so dblclick silently never fires here.
@@ -195,6 +206,8 @@ export class Grid {
     this.scrollEl.removeEventListener('mousedown', this.handleMouseDown);
     this.scrollEl.removeEventListener('contextmenu', this.handleContextMenu);
     this.headerCellsEl.removeEventListener('mousedown', this.handleHeaderMouseDown);
+    this.headerCellsEl.removeEventListener('click', this.handleInsertColClick);
+    this.gutterWrap.removeEventListener('click', this.handleInsertRowClick);
     document.removeEventListener('copy', this.handleCopy);
     document.removeEventListener('cut', this.handleCut);
     document.removeEventListener('paste', this.handlePaste);
@@ -287,6 +300,21 @@ export class Grid {
 
       this.headerCellsEl.appendChild(cell);
     }
+
+    // Sibling of the cells above (not nested inside one) — .grid-header-cell has
+    // overflow: hidden, which would clip a "+" straddling into the neighboring cell.
+    const colCount = this.data.headers.length;
+    const firstBoundary = Math.max(1, firstCol);
+    const lastBoundary = Math.min(colCount - 1, lastCol + 1);
+    for (let i = firstBoundary; i <= lastBoundary; i++) {
+      const zone = document.createElement('div');
+      zone.className = 'grid-insert-col-zone';
+      zone.style.left = `${GUTTER_WIDTH + i * COL_WIDTH - INSERT_ZONE_SIZE / 2}px`;
+      zone.style.width = `${INSERT_ZONE_SIZE}px`;
+      zone.dataset.insertCol = String(i);
+      zone.appendChild(createIcon(plusIcon));
+      this.headerCellsEl.appendChild(zone);
+    }
   }
 
   private renderGutter(firstRow: number, lastRow: number): void {
@@ -298,6 +326,20 @@ export class Grid {
       cell.dataset.row = String(r);
       cell.textContent = String(r + 1);
       this.gutterWrap.appendChild(cell);
+    }
+
+    // Sibling of the gutter cells above, same clipping reason as the column zones.
+    const rowCount = this.data.rows.length;
+    const firstBoundary = Math.max(1, firstRow);
+    const lastBoundary = Math.min(rowCount - 1, lastRow + 1);
+    for (let r = firstBoundary; r <= lastBoundary; r++) {
+      const zone = document.createElement('div');
+      zone.className = 'grid-insert-row-zone';
+      zone.style.top = `${r * ROW_HEIGHT - INSERT_ZONE_SIZE / 2}px`;
+      zone.style.height = `${INSERT_ZONE_SIZE}px`;
+      zone.dataset.insertRow = String(r);
+      zone.appendChild(createIcon(plusIcon));
+      this.gutterWrap.appendChild(zone);
     }
   }
 
@@ -554,6 +596,22 @@ export class Grid {
       event.preventDefault();
       this.startHeaderEdit(col);
     }
+  };
+
+  /** A single click always inserts — no drag/selection/double-click ambiguity to resolve here,
+   * unlike handleHeaderMouseDown, so a plain delegated 'click' listener is enough. */
+  private handleInsertColClick = (event: MouseEvent): void => {
+    const zone = (event.target as HTMLElement).closest<HTMLElement>('.grid-insert-col-zone');
+    if (!zone) return;
+    event.stopPropagation();
+    this.options.onInsertColumn(Number(zone.dataset.insertCol));
+  };
+
+  private handleInsertRowClick = (event: MouseEvent): void => {
+    const zone = (event.target as HTMLElement).closest<HTMLElement>('.grid-insert-row-zone');
+    if (!zone) return;
+    event.stopPropagation();
+    this.options.onInsertRow(Number(zone.dataset.insertRow));
   };
 
   private handleContextMenu = (event: MouseEvent): void => {

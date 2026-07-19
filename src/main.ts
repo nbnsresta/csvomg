@@ -133,6 +133,8 @@ function persistSession(): void {
 const grid = new Grid(gridContainer, {
   onCellEdit: handleCellEdit,
   onHeaderEdit: handleHeaderEdit,
+  onInsertColumn: handleInsertColumn,
+  onInsertRow: handleInsertRow,
   onBulkEdit: handleBulkEdit,
   onSelectionChange: updateSelectionStatus,
   onContextMenu: handleContextMenu,
@@ -734,6 +736,21 @@ function handleHeaderEdit(col: number, value: string): void {
   const tab = getActiveTab();
   if (!tab || tab.data.headers[col] === value) return;
   const mutation = renameColumn(tab.data, col, value);
+  commitMutation(mutation.data, mutation.diff);
+}
+
+/** Hover "+" between two column headers / gutter cells (grid.ts) — inserts blank at the boundary. */
+function handleInsertColumn(col: number): void {
+  const tab = getActiveTab();
+  if (!tab) return;
+  const mutation = insertColumn(tab.data, col);
+  commitMutation(mutation.data, mutation.diff);
+}
+
+function handleInsertRow(row: number): void {
+  const tab = getActiveTab();
+  if (!tab) return;
+  const mutation = insertRow(tab.data, row);
   commitMutation(mutation.data, mutation.diff);
 }
 

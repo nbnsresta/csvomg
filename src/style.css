@@ -660,6 +660,51 @@ footer#status-bar {
   margin: 0;
 }
 
+/*
+ * Sibling of the header/gutter cells (see grid.ts's renderHeader/renderGutter), not a descendant
+ * of one — always present, straddling the boundary between two cells, but visually inert until
+ * hovered so it doesn't look like a permanent seam in the header/gutter.
+ */
+.grid-insert-col-zone {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-bottom: 4px;
+  cursor: pointer;
+  z-index: 1;
+}
+
+.grid-insert-row-zone {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 4px;
+  cursor: pointer;
+  z-index: 1;
+}
+
+.grid-insert-col-zone svg,
+.grid-insert-row-zone svg {
+  width: 12px;
+  height: 12px;
+  opacity: 0;
+  background-color: var(--accent);
+  color: var(--surface-color);
+  border-radius: 25%;
+  transition: opacity 100ms;
+}
+
+.grid-insert-col-zone:hover svg,
+.grid-insert-row-zone:hover svg {
+  opacity: 1;
+}
+
 .grid-header-cell-input {
   width: 100%;
   height: 100%;
