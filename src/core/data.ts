@@ -109,8 +109,8 @@ export function reorderColumn(data: DataModel, from: number, to: number): Mutati
   };
 }
 
-export const BUFFER_ROWS = 2;
-export const BUFFER_COLS = 2;
+export const BUFFER_ROWS = 1;
+export const BUFFER_COLS = 1;
 
 /** 0->A, 25->Z, 26->AA, ... — same convention newFile()'s original ['A','B','C'] headers used. */
 export function nextColumnLetter(index: number): string {
@@ -129,6 +129,26 @@ function isRowEmpty(row: string[]): boolean {
 
 function isColumnEmpty(data: DataModel, col: number): boolean {
   return data.rows.every((row) => (row[col] ?? '').trim() === '');
+}
+
+/**
+ * Row/column counts for display (status bar): only rows/columns with real cell content, same
+ * "header text alone doesn't count" convention as hasContent() — a column can be entirely blank
+ * (no data ever typed into it) while still carrying a non-blank header, e.g. an untouched buffer
+ * column's auto-assigned letter, or any other column whose header survived but whose data didn't.
+ * Not scoped to trailing/buffer positions specifically — any blank row/column is excluded,
+ * wherever it sits.
+ */
+export function countDataRows(data: DataModel): number {
+  return data.rows.filter((row) => !isRowEmpty(row)).length;
+}
+
+export function countDataColumns(data: DataModel): number {
+  let count = 0;
+  for (let c = 0; c < data.headers.length; c++) {
+    if (!isColumnEmpty(data, c)) count++;
+  }
+  return count;
 }
 
 function countTrailingEmptyColumns(data: DataModel): number {

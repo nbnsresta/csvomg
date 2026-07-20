@@ -135,8 +135,19 @@ export class Grid {
     document.addEventListener('paste', this.handlePaste);
   }
 
-  setData(data: DataModel): void {
+  /**
+   * `resetSelection` distinguishes "switching to a different tab" from "same tab, re-rendering
+   * after a mutation" — both go through this same method (there's one Grid instance shared across
+   * all tabs), but only the former should drop the old tab's selection instead of clamping it into
+   * the new data's bounds, which otherwise leaks e.g. a 3x3 range from tab A into tab B as a
+   * same-shaped range clamped to fit, even though nothing was ever selected there.
+   */
+  setData(data: DataModel, options?: { resetSelection?: boolean }): void {
     this.data = data;
+    if (options?.resetSelection) {
+      this.active = null;
+      this.anchor = null;
+    }
     const maxRow = data.rows.length - 1;
     const maxCol = data.headers.length - 1;
     if (this.active) {

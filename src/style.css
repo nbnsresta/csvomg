@@ -608,6 +608,10 @@ footer#status-bar {
   box-sizing: border-box;
 }
 
+.grid-gutter-cell:hover {
+    background-color: var(--surface-hover);
+}
+
 /*
  * Absolute + inset:0, not a normal-flow sibling of grid-gutter-wrap: it needs to overlay the
  * same box as the gutter (cell left-offsets already start past GUTTER_WIDTH, so there's no

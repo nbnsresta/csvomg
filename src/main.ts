@@ -1,5 +1,7 @@
 import './style.css';
 import {
+  countDataColumns,
+  countDataRows,
   createDataModel,
   deleteColumn,
   deleteRow,
@@ -485,7 +487,7 @@ function activateTab(id: string): void {
   activeTabId = id;
   const tab = getActiveTab();
   if (!tab) return;
-  grid.setData(tab.data);
+  grid.setData(tab.data, { resetSelection: true });
   showGrid();
   updateStatus();
   // Restore this tab's own find session rather than re-running whatever was last typed
@@ -962,6 +964,10 @@ function updateSelectionStatus(sel: Selection | null): void {
 function updateStatus(): void {
   const tab = getActiveTab();
   btnToolbarSave.disabled = !tab;
+  // grid.setData() (tab switch) and grid.refresh() don't themselves fire onSelectionChange, so
+  // this is the one place — called on every mutation and every tab switch — that keeps the
+  // status bar's selection text from going stale relative to whichever tab is actually active.
+  updateSelectionStatus(tab ? grid.getSelection() : null);
 
   if (!tab) {
     statusCounts.textContent = '';
@@ -970,8 +976,8 @@ function updateStatus(): void {
     persistSession();
     return;
   }
-  const rows = tab.data.rows.length;
-  const cols = tab.data.headers.length;
+  const rows = countDataRows(tab.data);
+  const cols = countDataColumns(tab.data);
   statusCounts.textContent = `${rows} row${rows === 1 ? '' : 's'} · ${cols} col${cols === 1 ? '' : 's'}`;
   document.title = `${tab.dirty ? '● ' : ''}${tab.data.meta.filename} — csvomg`;
   renderTabs();

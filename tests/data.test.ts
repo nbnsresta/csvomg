@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyDiff,
+  countDataColumns,
+  countDataRows,
   createDataModel,
   deleteColumn,
   deleteRow,
@@ -182,89 +184,72 @@ describe('nextColumnLetter', () => {
 });
 
 describe('normalizeTrailingBuffer', () => {
-  it('grows a fully empty (0x0) model up to the 2x2 buffer', () => {
+  it('grows a fully empty (0x0) model up to the 1x1 buffer', () => {
     const blank = createDataModel([], [], 'Untitled.csv');
     const { data, diffs } = normalizeTrailingBuffer(blank);
-    expect(data.headers).toEqual(['A', 'B']);
-    expect(data.rows).toEqual([
-      ['', ''],
-      ['', ''],
-    ]);
+    expect(data.headers).toEqual(['A']);
+    expect(data.rows).toEqual([['']]);
     expect(diffs.length).toBeGreaterThan(0);
   });
 
-  it('is a no-op once already balanced at exactly 2 trailing blank rows/columns', () => {
-    const balanced = createDataModel(
-      ['A', 'B'],
-      [
-        ['', ''],
-        ['', ''],
-      ],
-      'test.csv',
-    );
+  it('is a no-op once already balanced at exactly 1 trailing blank row/column', () => {
+    const balanced = createDataModel(['A'], [['']], 'test.csv');
     const { data, diffs } = normalizeTrailingBuffer(balanced);
     expect(data).toEqual(balanced);
     expect(diffs).toEqual([]);
   });
 
-  it('grows exactly one more column once the left (first) buffer column gets content, keeping the right one', () => {
-    // C is the buffer column that was just typed into; D is still the untouched second buffer
-    // column, so only one new trailing column (E) is needed to restore a 2-column buffer.
+  it('grows exactly one more column once the sole buffer column gets content', () => {
+    // C is the single buffer column and it just got typed into, so one new trailing
+    // column (D) is needed to restore the 1-column buffer.
     const data0 = createDataModel(
-      ['A', 'B', 'C', 'D'],
+      ['A', 'B', 'C'],
       [
-        ['x', 'y', 'z', ''],
-        ['', '', '', ''],
-        ['', '', '', ''],
+        ['x', 'y', 'z'],
+        ['', '', ''],
       ],
       'test.csv',
     );
     const { data } = normalizeTrailingBuffer(data0);
-    expect(data.headers).toEqual(['A', 'B', 'C', 'D', 'E']);
+    expect(data.headers).toEqual(['A', 'B', 'C', 'D']);
     expect(data.rows).toEqual([
-      ['x', 'y', 'z', '', ''],
-      ['', '', '', '', ''],
-      ['', '', '', '', ''],
+      ['x', 'y', 'z', ''],
+      ['', '', '', ''],
     ]);
   });
 
-  it('shrinks back down to exactly 2 trailing blank rows/columns once extras appear', () => {
-    // Only D is genuinely surplus (B, C already form the correct 2-column buffer to A's data).
+  it('shrinks back down to exactly 1 trailing blank row/column once extras appear', () => {
+    // Only C and the extra blank row are genuinely surplus (B already forms the correct
+    // 1-column buffer to A's data).
     const overGrown = createDataModel(
-      ['A', 'B', 'C', 'D'],
+      ['A', 'B', 'C'],
       [
-        ['x', '', '', ''],
-        ['', '', '', ''],
-        ['', '', '', ''],
-        ['', '', '', ''],
+        ['x', '', ''],
+        ['', '', ''],
+        ['', '', ''],
       ],
       'test.csv',
     );
     const { data } = normalizeTrailingBuffer(overGrown);
-    expect(data.headers).toEqual(['A', 'B', 'C']);
+    expect(data.headers).toEqual(['A', 'B']);
     expect(data.rows).toEqual([
-      ['x', '', ''],
-      ['', '', ''],
-      ['', '', ''],
+      ['x', ''],
+      ['', ''],
     ]);
   });
 
-  it('never shrinks a fully-blank model below the 2x2 floor', () => {
+  it('never shrinks a fully-blank model below the 1x1 floor', () => {
     const allBlank = createDataModel(
       ['A', 'B', 'C'],
       [
-        ['', '', ''],
         ['', '', ''],
         ['', '', ''],
       ],
       'test.csv',
     );
     const { data } = normalizeTrailingBuffer(allBlank);
-    expect(data.headers).toEqual(['A', 'B']);
-    expect(data.rows).toEqual([
-      ['', ''],
-      ['', ''],
-    ]);
+    expect(data.headers).toEqual(['A']);
+    expect(data.rows).toEqual([['']]);
   });
 
   it('diffs round-trip back to the original via undoDiff, applied in reverse order', () => {
@@ -279,7 +264,7 @@ describe('normalizeTrailingBuffer', () => {
 });
 
 describe('trimTrailingBlank', () => {
-  it('strips buffer padding down to zero, unlike normalizeTrailingBuffer which keeps 2x2', () => {
+  it('strips buffer padding down to zero, unlike normalizeTrailingBuffer which keeps 1x1', () => {
     const padded = createDataModel(
       ['A', 'B', 'C'],
       [
@@ -304,5 +289,53 @@ describe('trimTrailingBlank', () => {
   it('is a no-op when there is no trailing blank padding', () => {
     const tight = createDataModel(['A', 'B'], [['x', 'y']], 'test.csv');
     expect(trimTrailingBlank(tight)).toEqual(tight);
+  });
+});
+
+describe('countDataRows / countDataColumns', () => {
+  it('excludes the trailing blank buffer row/column, even though the buffer column has a real (letter) header', () => {
+    // C is the untouched buffer column (real header, blank cells); row 2 is the buffer row.
+    const data = createDataModel(
+      ['A', 'B', 'C'],
+      [
+        ['x', 'y', ''],
+        ['', '', ''],
+      ],
+      'test.csv',
+    );
+    expect(countDataRows(data)).toBe(1);
+    expect(countDataColumns(data)).toBe(2);
+  });
+
+  it('excludes a fully blank column even where its header is also blank, not just a buffer letter', () => {
+    const data = createDataModel(
+      ['A', ''],
+      [
+        ['x', ''],
+        ['y', ''],
+      ],
+      'test.csv',
+    );
+    expect(countDataColumns(data)).toBe(1);
+  });
+
+  it('excludes a blank row/column wherever it sits, not only at the trailing edge', () => {
+    const data = createDataModel(
+      ['A', 'B', 'C'],
+      [
+        ['x', '', 'z'],
+        ['', '', ''],
+        ['y', '', 'w'],
+      ],
+      'test.csv',
+    );
+    expect(countDataRows(data)).toBe(2);
+    expect(countDataColumns(data)).toBe(2);
+  });
+
+  it('returns 0 for a fully blank model regardless of header text', () => {
+    const blank = createDataModel(['A'], [['']], 'Untitled.csv');
+    expect(countDataRows(blank)).toBe(0);
+    expect(countDataColumns(blank)).toBe(0);
   });
 });
