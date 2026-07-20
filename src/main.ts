@@ -35,7 +35,7 @@ import { Grid, type CellEdit, type ContextMenuTarget } from './ui/grid.ts';
 import { showReconnectDialog } from './ui/reconnect-dialog.ts';
 import type { DataModel, Diff, FileType, Mutation, Selection, SortState } from './types/index.ts';
 import pencilIcon from './icons/pencil.svg?raw';
-import plusIcon from './icons/plus.svg?raw';
+import columnInsertLeftIcon from './icons/column-insert-left.svg?raw';
 import arrowUpIcon from './icons/arrow-up.svg?raw';
 import trashIcon from './icons/trash.svg?raw';
 
@@ -943,8 +943,15 @@ function buildColumnActionItems(data: DataModel, col: number): ContextMenuItem[]
         commit(renameColumn(data, col, name));
       },
     },
-    { label: 'Insert column left', icon: plusIcon, onSelect: () => commit(insertColumn(data, col)) },
-    { label: 'Insert column right', icon: plusIcon, onSelect: () => commit(insertColumn(data, col + 1)) },
+    { label: 'Insert column left', icon: columnInsertLeftIcon, onSelect: () => commit(insertColumn(data, col)) },
+    {
+      label: 'Insert column right',
+      icon: columnInsertLeftIcon,
+      // Reuses the same asset flipped, rather than a near-duplicate file — same trick as
+      // arrow-up.svg's icon-rot-* reuse for Move left/right below.
+      iconClass: 'icon-flip-x',
+      onSelect: () => commit(insertColumn(data, col + 1)),
+    },
     {
       label: 'Move left',
       icon: arrowUpIcon,

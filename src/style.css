@@ -615,6 +615,10 @@ footer#status-bar {
   transform: rotate(270deg);
 }
 
+.icon-flip-x {
+  transform: scaleX(-1);
+}
+
 /* Nested sticky (left, inside a sticky-top ancestor) is the standard way to pin a corner cell. */
 .grid-corner {
   position: sticky;
