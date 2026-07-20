@@ -83,6 +83,11 @@ interface DocTab {
   /** View-only row sort — never applied to `data` itself, see renderTabIntoGrid(). Not persisted
    * across a reload, matching `find`'s existing precedent. */
   sort: SortState | null;
+  /** Per-column widths, indexed by plain column position — not re-spliced across column
+   * insert/delete/reorder (accepted limitation, see getColumnWidths()). Read via
+   * getColumnWidths(tab), never indexed directly, since it may be shorter than the current
+   * column count. Not persisted across a reload, same as `sort`/`find`. */
+  columnWidths: number[];
   // --- reconnect-tab feature (retry #2, 2026-07-17): easy to fully revert, see STATUS.md ---
   /** True when restored from session with an unconfirmed handle permission — no content loaded yet, shown as a dimmed tab that reconnects on click. */
   needsReconnect?: boolean;
@@ -145,6 +150,7 @@ const grid = new Grid(gridContainer, {
   onInsertRow: handleInsertRow,
   onToggleSort: handleToggleSort,
   onColumnOptions: handleColumnOptions,
+  onColumnResize: handleColumnResize,
   onBulkEdit: handleBulkEdit,
   onSelectionChange: updateSelectionStatus,
   onContextMenu: handleContextMenu,
@@ -456,7 +462,7 @@ async function reopenRecentFile(entry: RecentFileEntry): Promise<void> {
       return;
     }
     const data = normalizeTrailingBuffer(createDataModel(draft.headers, draft.rows, draft.filename, draft.delimiter)).data;
-    tabs.push({ id: entry.id, data, handle: null, fileType: draft.fileType, dirty: true, history: createHistory(), find: createFindState(), sort: null });
+    tabs.push({ id: entry.id, data, handle: null, fileType: draft.fileType, dirty: true, history: createHistory(), find: createFindState(), sort: null, columnWidths: [] });
     activateTab(entry.id);
     return;
   }
@@ -479,6 +485,7 @@ async function reopenRecentFile(entry: RecentFileEntry): Promise<void> {
           history: createHistory(),
           find: createFindState(),
           sort: null,
+          columnWidths: [],
         };
         tabs.push(tab);
         activateTab(tab.id);
@@ -517,13 +524,23 @@ function toRealRow(order: number[], displayRow: number): number {
   return order[displayRow] ?? displayRow;
 }
 
+/** Pads/truncates a tab's stored column widths to the current column count — read here rather
+ * than indexing `tab.columnWidths` directly, since it isn't re-spliced across column
+ * insert/delete/reorder (accepted limitation, see STATUS.md): a structural edit in the middle can
+ * leave a trailing column showing a mismatched width until manually resized again, but the common
+ * case — the running buffer column growing/shrinking at the tail — is unaffected, since pad/
+ * truncate-from-the-end is exactly correct when the change is always at the tail. */
+function getColumnWidths(tab: DocTab): number[] {
+  return tab.data.headers.map((_, i) => tab.columnWidths[i]);
+}
+
 /** The one place tab data reaches Grid — pre-sorts a view for display only; `tab.data` itself
  * (and therefore undo/redo, drafts, and the saved file) never sees the reordered rows, which is
  * what makes sort "not etched to file" true by construction. */
 function renderTabIntoGrid(tab: DocTab, options?: { resetSelection?: boolean }): void {
   const order = computeRowOrder(tab);
   const view: DataModel = { ...tab.data, rows: order.map((i) => tab.data.rows[i]) };
-  grid.setData(view, { resetSelection: options?.resetSelection, sort: tab.sort });
+  grid.setData(view, { resetSelection: options?.resetSelection, sort: tab.sort, columnWidths: getColumnWidths(tab) });
 }
 
 function activateTab(id: string): void {
@@ -711,6 +728,7 @@ function loadFile(opened: OpenedFile): void {
     history: createHistory(),
     find: createFindState(),
     sort: null,
+    columnWidths: [],
   };
   tabs.push(tab);
   activateTab(tab.id);
@@ -727,6 +745,7 @@ function newFile(): void {
     history: createHistory(),
     find: createFindState(),
     sort: null,
+    columnWidths: [],
   };
   tabs.push(tab);
   activateTab(tab.id);
@@ -798,6 +817,17 @@ function handleToggleSort(col: number): void {
   renderTabIntoGrid(tab, { resetSelection: true });
   updateStatus();
   grid.focus(); // the clicked button's DOM node is torn down by the re-render, taking focus with it
+}
+
+/** Drag-resize settled at mouseup (grid.ts fires this once, not per-pixel). A column width is no
+ * more "content" than sort order is — doesn't touch tab.data, isn't undoable, doesn't mark dirty. */
+function handleColumnResize(col: number, width: number): void {
+  const tab = getActiveTab();
+  if (!tab) return;
+  const widths = getColumnWidths(tab);
+  widths[col] = width;
+  tab.columnWidths = widths;
+  renderTabIntoGrid(tab);
 }
 
 /** Hover "+" between two column headers / gutter cells (grid.ts) — inserts blank at the boundary. */
@@ -1163,7 +1193,7 @@ async function restoreSession(): Promise<void> {
       const rawData = createDataModel(draft.headers, draft.rows, draft.filename, draft.delimiter);
       if (!hasContent(rawData)) continue;
       const data = normalizeTrailingBuffer(rawData).data;
-      tabs.push({ id: ref.id, data, handle: null, fileType: draft.fileType, dirty: true, history: createHistory(), find: createFindState(), sort: null });
+      tabs.push({ id: ref.id, data, handle: null, fileType: draft.fileType, dirty: true, history: createHistory(), find: createFindState(), sort: null, columnWidths: [] });
       continue;
     }
 
@@ -1186,6 +1216,7 @@ async function restoreSession(): Promise<void> {
           history: createHistory(),
           find: createFindState(),
           sort: null,
+          columnWidths: [],
           needsReconnect: true,
         });
         continue;
@@ -1202,6 +1233,7 @@ async function restoreSession(): Promise<void> {
         history: createHistory(),
         find: createFindState(),
         sort: null,
+        columnWidths: [],
       });
     } catch {
       continue;

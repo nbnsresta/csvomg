@@ -724,7 +724,18 @@ footer#status-bar {
   align-items: center;
   justify-content: flex-end;
   padding-bottom: 4px;
-  cursor: pointer;
+  /* Dual-purpose (insert click / resize drag) — col-resize reads as the more frequent action
+   * once real data exists; a plain click still inserts, unchanged. */
+  cursor: col-resize;
+  z-index: 1;
+}
+
+/* The last column's own trailing edge — resize only, no insert icon (see grid.ts). */
+.grid-col-resize-edge {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  cursor: col-resize;
   z-index: 1;
 }
 

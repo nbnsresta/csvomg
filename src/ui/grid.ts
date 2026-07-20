@@ -14,6 +14,11 @@ const OVERSCAN = 4;
 const DOUBLE_CLICK_MS = 400;
 // Hover "+" hit-zone straddling a boundary between two headers/gutter cells.
 const INSERT_ZONE_SIZE = 12;
+// Small enough to be a deliberate choice, large enough to keep the header's sort + options
+// buttons plus a sliver of label visible.
+const MIN_COL_WIDTH = 60;
+// Mousedown-then-move-this-far on a column boundary zone means "resize", not "click to insert".
+const RESIZE_DRAG_THRESHOLD = 4;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -44,6 +49,8 @@ export interface GridOptions {
   onToggleSort: (col: number) => void;
   /** Header options-icon click — opens the rename/insert/move/delete menu at (x, y). */
   onColumnOptions: (col: number, x: number, y: number) => void;
+  /** Drag-resize settled at mouseup — fired once, not per-pixel. */
+  onColumnResize: (col: number, width: number) => void;
   /**
    * Fired once for a multi-cell operation (paste, Delete/Backspace-clear) instead of calling
    * onCellEdit per cell — lets the caller record it as a single undo step rather than one per
@@ -80,6 +87,14 @@ export class Grid {
   /** Adopted from setData()'s options bag — purely for rendering the correct per-column sort
    * icon; Grid never acts on this itself (main.ts owns and applies sort, see renderTabIntoGrid). */
   private sort: SortState | null = null;
+  /** Per-column widths, adopted from setData()'s options bag (main.ts owns the persisted values
+   * per-tab) and live-mutated locally during an active resize drag. */
+  private columnWidths: number[] = [];
+  /** Prefix sums over columnWidths — colOffsets[i] is column i's left edge (relative to the
+   * gutter), colOffsets[colCount] is the total content width. Recomputed whenever columnWidths
+   * changes (setData, and every step of a live resize drag) so render()/scrollActiveIntoView()
+   * don't each re-derive it. */
+  private colOffsets: number[] = [0];
 
   constructor(container: HTMLElement, options: GridOptions) {
     this.container = container;
@@ -122,7 +137,7 @@ export class Grid {
     // Delegated, not per-zone/button: header cells (and their sort/options buttons) and the
     // insert-zone divs are all rebuilt on every render, so a single listener per stable parent
     // avoids re-attaching per render.
-    this.headerCellsEl.addEventListener('click', this.handleInsertColClick);
+    this.headerCellsEl.addEventListener('mousedown', this.handleColZoneMouseDown);
     this.headerCellsEl.addEventListener('click', this.handleSortBtnClick);
     this.headerCellsEl.addEventListener('click', this.handleOptionsBtnClick);
     this.gutterWrap.addEventListener('click', this.handleInsertRowClick);
@@ -147,9 +162,14 @@ export class Grid {
    * the new data's bounds, which otherwise leaks e.g. a 3x3 range from tab A into tab B as a
    * same-shaped range clamped to fit, even though nothing was ever selected there.
    */
-  setData(data: DataModel, options?: { resetSelection?: boolean; sort?: SortState | null }): void {
+  setData(data: DataModel, options?: { resetSelection?: boolean; sort?: SortState | null; columnWidths?: number[] }): void {
     this.data = data;
     this.sort = options?.sort ?? null;
+    // Defensive pad/truncate to the current column count — mirrors the active/anchor clamp below,
+    // and covers main.ts's own equivalent normalization at the read site (belt and suspenders).
+    const widths = options?.columnWidths ?? [];
+    this.columnWidths = data.headers.map((_, i) => widths[i] ?? COL_WIDTH);
+    this.recomputeColOffsets();
     if (options?.resetSelection) {
       this.active = null;
       this.anchor = null;
@@ -221,7 +241,7 @@ export class Grid {
     this.scrollEl.removeEventListener('keydown', this.handleKeyDown);
     this.scrollEl.removeEventListener('mousedown', this.handleMouseDown);
     this.scrollEl.removeEventListener('contextmenu', this.handleContextMenu);
-    this.headerCellsEl.removeEventListener('click', this.handleInsertColClick);
+    this.headerCellsEl.removeEventListener('mousedown', this.handleColZoneMouseDown);
     this.headerCellsEl.removeEventListener('click', this.handleSortBtnClick);
     this.headerCellsEl.removeEventListener('click', this.handleOptionsBtnClick);
     this.gutterWrap.removeEventListener('click', this.handleInsertRowClick);
@@ -231,6 +251,25 @@ export class Grid {
     this.root.remove();
   }
 
+  private recomputeColOffsets(): void {
+    const offsets = [0];
+    let sum = 0;
+    for (const w of this.columnWidths) {
+      sum += w;
+      offsets.push(sum);
+    }
+    this.colOffsets = offsets;
+  }
+
+  /** Linear scan, not a division — columns are no longer uniform width. colCount is realistically
+   * small (tens, rarely low hundreds, for a CSV in this app), so this is cheap even every render. */
+  private findColAtOffset(targetOffset: number): number {
+    for (let i = 0; i < this.colOffsets.length - 1; i++) {
+      if (this.colOffsets[i + 1] > targetOffset) return i;
+    }
+    return Math.max(0, this.colOffsets.length - 2);
+  }
+
   /**
    * The header row + body are stacked in normal block flow (header first, fixed height; body
    * second, height = row count * ROW_HEIGHT). Their combined size IS grid-scroll's scrollable
@@ -238,7 +277,7 @@ export class Grid {
    * scroll reveals the same range for header cells and data cells alike.
    */
   private updateSizer(): void {
-    const width = GUTTER_WIDTH + this.data.headers.length * COL_WIDTH;
+    const width = GUTTER_WIDTH + this.colOffsets[this.colOffsets.length - 1];
     const height = this.data.rows.length * ROW_HEIGHT;
     this.headerWrap.style.width = `${width}px`;
     this.body.style.width = `${width}px`;
@@ -285,8 +324,8 @@ export class Grid {
 
     const firstRow = clamp(Math.floor(bodyTop / ROW_HEIGHT) - OVERSCAN, 0, Math.max(0, rowCount - 1));
     const lastRow = clamp(Math.ceil((bodyTop + viewportHeight) / ROW_HEIGHT) + OVERSCAN, 0, Math.max(0, rowCount - 1));
-    const firstCol = clamp(Math.floor(bodyLeft / COL_WIDTH) - OVERSCAN, 0, Math.max(0, colCount - 1));
-    const lastCol = clamp(Math.ceil((bodyLeft + viewportWidth) / COL_WIDTH) + OVERSCAN, 0, Math.max(0, colCount - 1));
+    const firstCol = clamp(this.findColAtOffset(bodyLeft) - OVERSCAN, 0, Math.max(0, colCount - 1));
+    const lastCol = clamp(this.findColAtOffset(bodyLeft + viewportWidth) + OVERSCAN, 0, Math.max(0, colCount - 1));
 
     this.renderHeader(firstCol, lastCol);
     this.renderGutter(firstRow, lastRow);
@@ -299,8 +338,8 @@ export class Grid {
     for (let c = firstCol; c <= lastCol; c++) {
       const cell = document.createElement('div');
       cell.className = 'grid-header-cell';
-      cell.style.left = `${GUTTER_WIDTH + c * COL_WIDTH}px`;
-      cell.style.width = `${COL_WIDTH}px`;
+      cell.style.left = `${GUTTER_WIDTH + this.colOffsets[c]}px`;
+      cell.style.width = `${this.colOffsets[c + 1] - this.colOffsets[c]}px`;
       cell.dataset.col = String(c);
 
       const label = document.createElement('span');
@@ -335,17 +374,32 @@ export class Grid {
 
     // Sibling of the cells above (not nested inside one) — .grid-header-cell has
     // overflow: hidden, which would clip a "+" straddling into the neighboring cell.
+    // Dual-purpose: a plain click inserts a column (unchanged); a drag resizes the column to its
+    // left (col - 1) — see handleColZoneMouseDown. Internal boundaries only (not before the first
+    // or after the last column) since "insert before the first / after the last" isn't part of
+    // this affordance — right-click on the edge cell already covers that.
     const colCount = this.data.headers.length;
     const firstBoundary = Math.max(1, firstCol);
     const lastBoundary = Math.min(colCount - 1, lastCol + 1);
     for (let i = firstBoundary; i <= lastBoundary; i++) {
       const zone = document.createElement('div');
       zone.className = 'grid-insert-col-zone';
-      zone.style.left = `${GUTTER_WIDTH + i * COL_WIDTH - INSERT_ZONE_SIZE / 2}px`;
+      zone.style.left = `${GUTTER_WIDTH + this.colOffsets[i] - INSERT_ZONE_SIZE / 2}px`;
       zone.style.width = `${INSERT_ZONE_SIZE}px`;
       zone.dataset.insertCol = String(i);
       zone.appendChild(createIcon(plusIcon));
       this.headerCellsEl.appendChild(zone);
+    }
+
+    // The last column has no insert zone (insert zones stop one short of the outer edge), but it
+    // still needs its own trailing edge to be resizable — a resize-only zone, no insert fallback.
+    if (lastCol === colCount - 1 && colCount > 0) {
+      const edge = document.createElement('div');
+      edge.className = 'grid-col-resize-edge';
+      edge.style.left = `${GUTTER_WIDTH + this.colOffsets[colCount] - INSERT_ZONE_SIZE / 2}px`;
+      edge.style.width = `${INSERT_ZONE_SIZE}px`;
+      edge.dataset.resizeCol = String(colCount - 1);
+      this.headerCellsEl.appendChild(edge);
     }
   }
 
@@ -390,8 +444,8 @@ export class Grid {
         // as merely "selected" instead of distinctly "now being edited".
         if (!isEditingThisCell && this.isInSelection(r, c)) cell.classList.add('selected');
         cell.style.top = `${r * ROW_HEIGHT}px`;
-        cell.style.left = `${GUTTER_WIDTH + c * COL_WIDTH}px`;
-        cell.style.width = `${COL_WIDTH}px`;
+        cell.style.left = `${GUTTER_WIDTH + this.colOffsets[c]}px`;
+        cell.style.width = `${this.colOffsets[c + 1] - this.colOffsets[c]}px`;
         cell.dataset.row = String(r);
         cell.dataset.col = String(c);
 
@@ -449,8 +503,8 @@ export class Grid {
     // sticky header/gutter band has to be added back in here — see render()'s comment.
     const top = HEADER_HEIGHT + row * ROW_HEIGHT;
     const bottom = top + ROW_HEIGHT;
-    const left = GUTTER_WIDTH + col * COL_WIDTH;
-    const right = left + COL_WIDTH;
+    const left = GUTTER_WIDTH + this.colOffsets[col];
+    const right = GUTTER_WIDTH + this.colOffsets[col + 1];
 
     const viewTop = this.scrollEl.scrollTop + HEADER_HEIGHT;
     const viewBottom = this.scrollEl.scrollTop + this.scrollEl.clientHeight;
@@ -595,13 +649,49 @@ export class Grid {
     this.options.onColumnOptions(Number(btn.dataset.col), rect.left, rect.bottom + 4);
   };
 
-  /** A single click always inserts — no drag/selection/double-click ambiguity to resolve here,
-   * so a plain delegated 'click' listener is enough. */
-  private handleInsertColClick = (event: MouseEvent): void => {
-    const zone = (event.target as HTMLElement).closest<HTMLElement>('.grid-insert-col-zone');
-    if (!zone) return;
+  /**
+   * Dual-purpose, disambiguated by movement (same technique handleMouseDown already uses to tell
+   * a click from a drag-select): a plain click on `.grid-insert-col-zone` inserts a column,
+   * unchanged; a drag resizes instead. `.grid-col-resize-edge` (the last column's own trailing
+   * edge, which has no insert affordance) only ever resizes.
+   */
+  private handleColZoneMouseDown = (event: MouseEvent): void => {
+    const target = event.target as HTMLElement;
+    const insertZone = target.closest<HTMLElement>('.grid-insert-col-zone');
+    const resizeEdge = target.closest<HTMLElement>('.grid-col-resize-edge');
+    const zone = insertZone ?? resizeEdge;
+    if (!zone || event.button !== 0) return;
+    event.preventDefault();
     event.stopPropagation();
-    this.options.onInsertColumn(Number(zone.dataset.insertCol));
+
+    const insertCol = insertZone ? Number(insertZone.dataset.insertCol) : null;
+    // The boundary at index `col` sits at that column's right edge — resizing the column to its
+    // left is the standard convention. The resize-only edge already carries the real column index.
+    const resizeCol = insertZone ? insertCol! - 1 : Number(resizeEdge!.dataset.resizeCol);
+    const startX = event.clientX;
+    const startWidth = this.columnWidths[resizeCol] ?? COL_WIDTH;
+    let resized = false;
+
+    const onMove = (moveEvent: MouseEvent): void => {
+      const delta = moveEvent.clientX - startX;
+      if (!resized && Math.abs(delta) < RESIZE_DRAG_THRESHOLD) return;
+      resized = true;
+      this.columnWidths[resizeCol] = Math.max(MIN_COL_WIDTH, startWidth + delta);
+      this.recomputeColOffsets();
+      this.updateSizer();
+      this.renderNow();
+    };
+    const onUp = (): void => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      if (resized) {
+        this.options.onColumnResize(resizeCol, this.columnWidths[resizeCol]);
+      } else if (insertCol !== null) {
+        this.options.onInsertColumn(insertCol);
+      }
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
   };
 
   private handleInsertRowClick = (event: MouseEvent): void => {
