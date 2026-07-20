@@ -362,15 +362,19 @@ export class Grid {
       for (let c = firstCol; c <= lastCol; c++) {
         const cell = document.createElement('div');
         cell.className = 'grid-cell';
+        const isEditingThisCell = this.editing !== null && this.editing.row === r && this.editing.col === c;
         if (this.active && this.active.row === r && this.active.col === c) cell.classList.add('active');
-        if (this.isInSelection(r, c)) cell.classList.add('selected');
+        // Skip the .selected background wash while editing this cell — it's already marked as the
+        // current cell via .active's outline; keeping the tint too made an editing cell still read
+        // as merely "selected" instead of distinctly "now being edited".
+        if (!isEditingThisCell && this.isInSelection(r, c)) cell.classList.add('selected');
         cell.style.top = `${r * ROW_HEIGHT}px`;
         cell.style.left = `${GUTTER_WIDTH + c * COL_WIDTH}px`;
         cell.style.width = `${COL_WIDTH}px`;
         cell.dataset.row = String(r);
         cell.dataset.col = String(c);
 
-        if (this.editing && this.editing.row === r && this.editing.col === c) {
+        if (isEditingThisCell) {
           const input = document.createElement('input');
           input.className = 'grid-cell-input';
           input.value = row[c] ?? '';
@@ -548,13 +552,19 @@ export class Grid {
     if (event.button !== 0) return;
     const target = (event.target as HTMLElement).closest<HTMLElement>('.grid-cell');
     if (!target) return;
+    const row = Number(target.dataset.row);
+    const col = Number(target.dataset.col);
+    // The edit <input> is a DOM descendant of .grid-cell, so a click inside it (e.g. to reposition
+    // the caret) still bubbles up here. Without this early return, the logic below would commit and
+    // collapse straight back to "selected" on every such click instead of letting the browser's own
+    // native input click (caret positioning / text selection) happen — falling through here leaves
+    // the input completely untouched, as if this handler weren't attached at all.
+    if (this.editing && this.editing.row === row && this.editing.col === col) return;
     // Without this, the browser's default mousedown action blurs the current focus
     // (since the click landed on a non-focusable cell div) right after our own
     // scrollEl.focus() call below runs, silently discarding it.
     event.preventDefault();
     if (this.editing) this.commitEdit();
-    const row = Number(target.dataset.row);
-    const col = Number(target.dataset.col);
 
     const now = Date.now();
     const isDoubleClick =
@@ -726,6 +736,27 @@ export class Grid {
       event.preventDefault();
       event.stopPropagation();
       this.cancelEdit();
+    } else if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      // A single-line input has no native meaning for vertical arrows, so no caret-position check
+      // is needed here — unlike Left/Right below, always exits and moves (mirrors Tab).
+      event.preventDefault();
+      event.stopPropagation();
+      this.commitEdit();
+      this.moveActive(event.key === 'ArrowUp' ? -1 : 1, 0, false);
+      this.scrollEl.focus();
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      const input = event.target as HTMLInputElement;
+      const atStart = input.selectionStart === 0 && input.selectionEnd === 0;
+      const atEnd = input.selectionStart === input.value.length && input.selectionEnd === input.value.length;
+      // Only exits at the collapsed-caret edge — mid-text, or a non-empty selection touching an
+      // edge, falls through untouched so the browser can move/collapse the caret natively instead.
+      if ((event.key === 'ArrowLeft' && atStart) || (event.key === 'ArrowRight' && atEnd)) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.commitEdit();
+        this.moveActive(0, event.key === 'ArrowLeft' ? -1 : 1, false);
+        this.scrollEl.focus();
+      }
     }
   };
 
