@@ -1,6 +1,13 @@
+import { createIcon } from '../utils/icons.ts';
+
 export interface ContextMenuItem {
   label: string;
   onSelect: () => void;
+  /** Raw SVG markup (the `?raw` import convention) — optional, row/cell menus don't use one. */
+  icon?: string;
+  /** Applied to the icon element — e.g. an `icon-rot-*` utility class to reuse one SVG asset
+   * (like arrow-up) for a differently-oriented action instead of shipping a near-duplicate file. */
+  iconClass?: string;
   danger?: boolean;
   disabled?: boolean;
 }
@@ -27,7 +34,14 @@ export function showContextMenu(x: number, y: number, items: ContextMenuItem[]):
     button.className = 'context-menu-item';
     if (item.danger) button.classList.add('danger');
     if (item.disabled) button.classList.add('disabled');
-    button.textContent = item.label;
+    if (item.icon) {
+      const iconEl = createIcon(item.icon);
+      if (item.iconClass) iconEl.classList.add(item.iconClass);
+      button.appendChild(iconEl);
+    }
+    const label = document.createElement('span');
+    label.textContent = item.label;
+    button.appendChild(label);
     button.disabled = !!item.disabled;
     button.addEventListener('click', () => {
       closeActiveMenu();

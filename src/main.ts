@@ -33,7 +33,11 @@ import { showContextMenu, type ContextMenuItem } from './ui/context-menu.ts';
 import { createFindBar } from './ui/find-bar.ts';
 import { Grid, type CellEdit, type ContextMenuTarget } from './ui/grid.ts';
 import { showReconnectDialog } from './ui/reconnect-dialog.ts';
-import type { DataModel, Diff, FileType, Mutation, Selection } from './types/index.ts';
+import type { DataModel, Diff, FileType, Mutation, Selection, SortState } from './types/index.ts';
+import pencilIcon from './icons/pencil.svg?raw';
+import plusIcon from './icons/plus.svg?raw';
+import arrowUpIcon from './icons/arrow-up.svg?raw';
+import trashIcon from './icons/trash.svg?raw';
 
 const emptyState = document.getElementById('empty-state') as HTMLDivElement;
 const gridContainer = document.getElementById('grid-container') as HTMLDivElement;
@@ -76,6 +80,9 @@ interface DocTab {
   history: History;
   /** Find/Replace session for this tab — never shared across tabs, see syncFindBar(). */
   find: TabFindState;
+  /** View-only row sort — never applied to `data` itself, see renderTabIntoGrid(). Not persisted
+   * across a reload, matching `find`'s existing precedent. */
+  sort: SortState | null;
   // --- reconnect-tab feature (retry #2, 2026-07-17): easy to fully revert, see STATUS.md ---
   /** True when restored from session with an unconfirmed handle permission — no content loaded yet, shown as a dimmed tab that reconnects on click. */
   needsReconnect?: boolean;
@@ -134,9 +141,10 @@ function persistSession(): void {
 
 const grid = new Grid(gridContainer, {
   onCellEdit: handleCellEdit,
-  onHeaderEdit: handleHeaderEdit,
   onInsertColumn: handleInsertColumn,
   onInsertRow: handleInsertRow,
+  onToggleSort: handleToggleSort,
+  onColumnOptions: handleColumnOptions,
   onBulkEdit: handleBulkEdit,
   onSelectionChange: updateSelectionStatus,
   onContextMenu: handleContextMenu,
@@ -448,7 +456,7 @@ async function reopenRecentFile(entry: RecentFileEntry): Promise<void> {
       return;
     }
     const data = normalizeTrailingBuffer(createDataModel(draft.headers, draft.rows, draft.filename, draft.delimiter)).data;
-    tabs.push({ id: entry.id, data, handle: null, fileType: draft.fileType, dirty: true, history: createHistory(), find: createFindState() });
+    tabs.push({ id: entry.id, data, handle: null, fileType: draft.fileType, dirty: true, history: createHistory(), find: createFindState(), sort: null });
     activateTab(entry.id);
     return;
   }
@@ -470,6 +478,7 @@ async function reopenRecentFile(entry: RecentFileEntry): Promise<void> {
           dirty: false,
           history: createHistory(),
           find: createFindState(),
+          sort: null,
         };
         tabs.push(tab);
         activateTab(tab.id);
@@ -483,11 +492,45 @@ async function reopenRecentFile(entry: RecentFileEntry): Promise<void> {
   // --- end reopenRecentFile() file-kind branch ---
 }
 
+/** Numeric-aware compare when both sides parse as numbers, else locale compare. */
+function compareCellValues(a: string, b: string): number {
+  const na = a.trim() === '' ? NaN : Number(a);
+  const nb = b.trim() === '' ? NaN : Number(b);
+  if (!Number.isNaN(na) && !Number.isNaN(nb)) return na - nb;
+  return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+}
+
+/** Real row indices in display order — identity order when unsorted. Recomputed fresh on every
+ * call rather than cached: sorts at this app's realistic row counts are cheap, and caching would
+ * mean tracking invalidation across every mutation path (insert/delete/paste-growth/undo/redo). */
+function computeRowOrder(tab: DocTab): number[] {
+  const indices = tab.data.rows.map((_, i) => i);
+  if (!tab.sort || tab.sort.sortBy >= tab.data.headers.length) return indices;
+  const { sortBy, sortOrder } = tab.sort;
+  const dir = sortOrder === 'asc' ? 1 : -1;
+  return indices.sort((a, b) => compareCellValues(tab.data.rows[a][sortBy] ?? '', tab.data.rows[b][sortBy] ?? '') * dir);
+}
+
+/** Maps a display-space row index (as reported by Grid, which only ever sees the sorted view)
+ * back to its real index in `tab.data.rows`. */
+function toRealRow(order: number[], displayRow: number): number {
+  return order[displayRow] ?? displayRow;
+}
+
+/** The one place tab data reaches Grid — pre-sorts a view for display only; `tab.data` itself
+ * (and therefore undo/redo, drafts, and the saved file) never sees the reordered rows, which is
+ * what makes sort "not etched to file" true by construction. */
+function renderTabIntoGrid(tab: DocTab, options?: { resetSelection?: boolean }): void {
+  const order = computeRowOrder(tab);
+  const view: DataModel = { ...tab.data, rows: order.map((i) => tab.data.rows[i]) };
+  grid.setData(view, { resetSelection: options?.resetSelection, sort: tab.sort });
+}
+
 function activateTab(id: string): void {
   activeTabId = id;
   const tab = getActiveTab();
   if (!tab) return;
-  grid.setData(tab.data, { resetSelection: true });
+  renderTabIntoGrid(tab, { resetSelection: true });
   showGrid();
   updateStatus();
   // Restore this tab's own find session rather than re-running whatever was last typed
@@ -667,6 +710,7 @@ function loadFile(opened: OpenedFile): void {
     dirty: false,
     history: createHistory(),
     find: createFindState(),
+    sort: null,
   };
   tabs.push(tab);
   activateTab(tab.id);
@@ -682,6 +726,7 @@ function newFile(): void {
     dirty: true,
     history: createHistory(),
     find: createFindState(),
+    sort: null,
   };
   tabs.push(tab);
   activateTab(tab.id);
@@ -692,7 +737,7 @@ function newFile(): void {
 function applyTabUpdate(tab: DocTab, data: DataModel): void {
   tab.data = data;
   tab.dirty = true;
-  grid.setData(tab.data);
+  renderTabIntoGrid(tab);
   updateStatus();
   if (!tab.handle) {
     void saveDraft(tab.id, tab.data, tab.fileType).catch((err) => console.error('draft autosave failed', err));
@@ -711,6 +756,13 @@ function commitMutation(data: DataModel, diff: Diff | Diff[]): void {
   const tab = getActiveTab();
   if (!tab) return;
   const diffs = Array.isArray(diff) ? diff : [diff];
+  // A column structural edit can leave `sort.sortBy` pointing at the wrong column — silently
+  // sorting by the wrong column would be worse than sort just turning off, so it's cleared rather
+  // than remapped. Checked against the original diffs only, before normalizeTrailingBuffer's own
+  // buffer-maintenance column diffs are appended below — those must NOT clear an active sort.
+  if (tab.sort && diffs.some((d) => d.type === 'col-insert' || d.type === 'col-delete' || d.type === 'col-reorder')) {
+    tab.sort = null;
+  }
   const normalized = normalizeTrailingBuffer(data);
   tab.history = pushGroup(tab.history, [...diffs, ...normalized.diffs]);
   applyTabUpdate(tab, normalized.data);
@@ -734,11 +786,18 @@ function performRedo(): void {
   applyTabUpdate(tab, result.data);
 }
 
-function handleHeaderEdit(col: number, value: string): void {
+/** Header sort-icon click — cycles asc → desc → none. Not a content change: doesn't mark the tab
+ * dirty. Resets selection since a selected cell has no coherent identity across a reorder (same
+ * reasoning as the tab-switch resetSelection fix). */
+function handleToggleSort(col: number): void {
   const tab = getActiveTab();
-  if (!tab || tab.data.headers[col] === value) return;
-  const mutation = renameColumn(tab.data, col, value);
-  commitMutation(mutation.data, mutation.diff);
+  if (!tab) return;
+  if (!tab.sort || tab.sort.sortBy !== col) tab.sort = { sortBy: col, sortOrder: 'asc' };
+  else if (tab.sort.sortOrder === 'asc') tab.sort = { sortBy: col, sortOrder: 'desc' };
+  else tab.sort = null;
+  renderTabIntoGrid(tab, { resetSelection: true });
+  updateStatus();
+  grid.focus(); // the clicked button's DOM node is torn down by the re-render, taking focus with it
 }
 
 /** Hover "+" between two column headers / gutter cells (grid.ts) — inserts blank at the boundary. */
@@ -752,25 +811,32 @@ function handleInsertColumn(col: number): void {
 function handleInsertRow(row: number): void {
   const tab = getActiveTab();
   if (!tab) return;
-  const mutation = insertRow(tab.data, row);
+  const order = computeRowOrder(tab);
+  const realRow = row < order.length ? order[row] : tab.data.rows.length;
+  const mutation = insertRow(tab.data, realRow);
   commitMutation(mutation.data, mutation.diff);
 }
 
 function handleCellEdit(row: number, col: number, value: string): void {
   const tab = getActiveTab();
   if (!tab) return;
-  if ((tab.data.rows[row]?.[col] ?? '') === value) return;
-  const mutation = setCell(tab.data, row, col, value);
+  const realRow = toRealRow(computeRowOrder(tab), row);
+  if ((tab.data.rows[realRow]?.[col] ?? '') === value) return;
+  const mutation = setCell(tab.data, realRow, col, value);
   commitMutation(mutation.data, mutation.diff);
 }
 
 /** A multi-cell operation (paste, Delete/Backspace-clear) — recorded as a single undo step.
  * Paste can target cells beyond the sheet's current bounds (grid.ts no longer clips it, see
  * applyPastedText) — grown first so the whole pasted block lands. Delete/Backspace-clear's
- * edits are always already in-bounds, so these loops are no-ops on that path. */
+ * edits are always already in-bounds, so these loops are no-ops on that path. Edits within the
+ * original row count are display-space and translate via the sort order; edits beyond it are
+ * rows the growth loop just appended at the real physical end, so they're already real indices. */
 function handleBulkEdit(edits: CellEdit[]): void {
   const tab = getActiveTab();
   if (!tab) return;
+  const order = computeRowOrder(tab);
+  const originalRowCount = tab.data.rows.length;
   let data = tab.data;
   const diffs: Diff[] = [];
   const maxRow = Math.max(-1, ...edits.map((e) => e.row));
@@ -786,8 +852,9 @@ function handleBulkEdit(edits: CellEdit[]): void {
     diffs.push(m.diff);
   }
   for (const edit of edits) {
-    if ((data.rows[edit.row]?.[edit.col] ?? '') === edit.value) continue;
-    const mutation = setCell(data, edit.row, edit.col, edit.value);
+    const realRow = edit.row < originalRowCount ? toRealRow(order, edit.row) : edit.row;
+    if ((data.rows[realRow]?.[edit.col] ?? '') === edit.value) continue;
+    const mutation = setCell(data, realRow, edit.col, edit.value);
     data = mutation.data;
     diffs.push(mutation.diff);
   }
@@ -800,6 +867,7 @@ function clearSelectedCells(): void {
   if (!tab) return;
   const sel = grid.getSelection();
   if (!sel) return;
+  const order = computeRowOrder(tab);
   const minRow = Math.min(sel.startRow, sel.endRow);
   const maxRow = Math.max(sel.startRow, sel.endRow);
   const minCol = Math.min(sel.startCol, sel.endCol);
@@ -807,8 +875,9 @@ function clearSelectedCells(): void {
   let data = tab.data;
   const diffs: Diff[] = [];
   for (let r = minRow; r <= maxRow; r++) {
+    const realRow = toRealRow(order, r);
     for (let c = minCol; c <= maxCol; c++) {
-      const mutation = setCell(data, r, c, '');
+      const mutation = setCell(data, realRow, c, '');
       data = mutation.data;
       diffs.push(mutation.diff);
     }
@@ -832,6 +901,62 @@ function withFocus(items: ContextMenuItem[]): ContextMenuItem[] {
   }));
 }
 
+/**
+ * Column actions, shared between the right-click header menu and the header options-icon menu —
+ * one options-icon click gets you the identical menu right-click already gives you, just a
+ * second, always-visible entry point. Order/icons match what's requested for the options icon;
+ * the right-click menu adopts the same order+icons rather than keeping two different orderings
+ * for the exact same actions.
+ */
+function buildColumnActionItems(data: DataModel, col: number): ContextMenuItem[] {
+  const commit = <D extends Diff>(mutation: Mutation<D>) => commitMutation(mutation.data, mutation.diff);
+  const lastCol = data.headers.length - 1;
+  const headerName = data.headers[col] || `Column ${col + 1}`;
+  return [
+    {
+      label: 'Rename column',
+      icon: pencilIcon,
+      onSelect: () => {
+        const name = prompt('Column name', data.headers[col]);
+        if (name === null) return;
+        commit(renameColumn(data, col, name));
+      },
+    },
+    { label: 'Insert column left', icon: plusIcon, onSelect: () => commit(insertColumn(data, col)) },
+    { label: 'Insert column right', icon: plusIcon, onSelect: () => commit(insertColumn(data, col + 1)) },
+    {
+      label: 'Move left',
+      icon: arrowUpIcon,
+      iconClass: 'icon-rot-270',
+      disabled: col === 0,
+      onSelect: () => commit(reorderColumn(data, col, col - 1)),
+    },
+    {
+      label: 'Move right',
+      icon: arrowUpIcon,
+      iconClass: 'icon-rot-90',
+      disabled: col === lastCol,
+      onSelect: () => commit(reorderColumn(data, col, col + 1)),
+    },
+    {
+      label: 'Delete column',
+      icon: trashIcon,
+      danger: true,
+      onSelect: () => {
+        if (!confirm(`Delete column "${headerName}"?`)) return;
+        commit(deleteColumn(data, col));
+      },
+    },
+  ];
+}
+
+/** Header options-icon click (grid.ts) — opens the same menu as right-clicking the header. */
+function handleColumnOptions(col: number, x: number, y: number): void {
+  const tab = getActiveTab();
+  if (!tab) return;
+  showContextMenu(x, y, withFocus(buildColumnActionItems(tab.data, col)));
+}
+
 function handleContextMenu(target: ContextMenuTarget): void {
   const tab = getActiveTab();
   if (!tab) return;
@@ -839,16 +964,17 @@ function handleContextMenu(target: ContextMenuTarget): void {
   const commit = <D extends Diff>(mutation: Mutation<D>) => commitMutation(mutation.data, mutation.diff);
 
   if (target.zone === 'row') {
+    const realRow = toRealRow(computeRowOrder(tab), target.row);
     const items: ContextMenuItem[] = [
-      { label: 'Insert row above', onSelect: () => commit(insertRow(data, target.row)) },
-      { label: 'Insert row below', onSelect: () => commit(insertRow(data, target.row + 1)) },
-      { label: 'Duplicate row', onSelect: () => commit(duplicateRow(data, target.row)) },
+      { label: 'Insert row above', onSelect: () => commit(insertRow(data, realRow)) },
+      { label: 'Insert row below', onSelect: () => commit(insertRow(data, realRow + 1)) },
+      { label: 'Duplicate row', onSelect: () => commit(duplicateRow(data, realRow)) },
       {
         label: 'Delete row',
         danger: true,
         onSelect: () => {
           if (!confirm(`Delete row ${target.row + 1}?`)) return;
-          commit(deleteRow(data, target.row));
+          commit(deleteRow(data, realRow));
         },
       },
     ];
@@ -857,39 +983,7 @@ function handleContextMenu(target: ContextMenuTarget): void {
   }
 
   if (target.zone === 'col') {
-    const lastCol = data.headers.length - 1;
-    const headerName = data.headers[target.col] || `Column ${target.col + 1}`;
-    const items: ContextMenuItem[] = [
-      { label: 'Insert column left', onSelect: () => commit(insertColumn(data, target.col)) },
-      { label: 'Insert column right', onSelect: () => commit(insertColumn(data, target.col + 1)) },
-      {
-        label: 'Rename column',
-        onSelect: () => {
-          const name = prompt('Column name', data.headers[target.col]);
-          if (name === null) return;
-          commit(renameColumn(data, target.col, name));
-        },
-      },
-      {
-        label: 'Move left',
-        disabled: target.col === 0,
-        onSelect: () => commit(reorderColumn(data, target.col, target.col - 1)),
-      },
-      {
-        label: 'Move right',
-        disabled: target.col === lastCol,
-        onSelect: () => commit(reorderColumn(data, target.col, target.col + 1)),
-      },
-      {
-        label: 'Delete column',
-        danger: true,
-        onSelect: () => {
-          if (!confirm(`Delete column "${headerName}"?`)) return;
-          commit(deleteColumn(data, target.col));
-        },
-      },
-    ];
-    showContextMenu(target.x, target.y, withFocus(items));
+    showContextMenu(target.x, target.y, withFocus(buildColumnActionItems(data, target.col)));
     return;
   }
 
@@ -1069,7 +1163,7 @@ async function restoreSession(): Promise<void> {
       const rawData = createDataModel(draft.headers, draft.rows, draft.filename, draft.delimiter);
       if (!hasContent(rawData)) continue;
       const data = normalizeTrailingBuffer(rawData).data;
-      tabs.push({ id: ref.id, data, handle: null, fileType: draft.fileType, dirty: true, history: createHistory(), find: createFindState() });
+      tabs.push({ id: ref.id, data, handle: null, fileType: draft.fileType, dirty: true, history: createHistory(), find: createFindState(), sort: null });
       continue;
     }
 
@@ -1091,6 +1185,7 @@ async function restoreSession(): Promise<void> {
           dirty: false,
           history: createHistory(),
           find: createFindState(),
+          sort: null,
           needsReconnect: true,
         });
         continue;
@@ -1106,6 +1201,7 @@ async function restoreSession(): Promise<void> {
         dirty: false,
         history: createHistory(),
         find: createFindState(),
+        sort: null,
       });
     } catch {
       continue;

@@ -1,5 +1,8 @@
-import type { DataModel, Selection } from '../types/index.ts';
+import type { DataModel, Selection, SortState } from '../types/index.ts';
 import plusIcon from '../icons/plus.svg?raw';
+import sortIcon from '../icons/sort.svg?raw';
+import arrowUpIcon from '../icons/arrow-up.svg?raw';
+import dotsVerticalIcon from '../icons/dots-vertical.svg?raw';
 import { createIcon } from '../utils/icons.ts';
 
 // Mirrors the --row-height / --header-height / --gutter-width tokens in style.css.
@@ -34,10 +37,13 @@ export interface CellEdit {
 
 export interface GridOptions {
   onCellEdit: (row: number, col: number, value: string) => void;
-  onHeaderEdit: (col: number, value: string) => void;
   /** Hover "+" between two column headers / two gutter cells — inserts before the given index. */
   onInsertColumn: (col: number) => void;
   onInsertRow: (row: number) => void;
+  /** Header sort-icon click — cycles asc → desc → none for that column. */
+  onToggleSort: (col: number) => void;
+  /** Header options-icon click — opens the rename/insert/move/delete menu at (x, y). */
+  onColumnOptions: (col: number, x: number, y: number) => void;
   /**
    * Fired once for a multi-cell operation (paste, Delete/Backspace-clear) instead of calling
    * onCellEdit per cell — lets the caller record it as a single undo step rather than one per
@@ -67,14 +73,13 @@ export class Grid {
   private active: CellPos | null = null;
   private editing: CellPos | null = null;
   private activeInputEl: HTMLInputElement | null = null;
-  private editingHeader: number | null = null;
-  private activeHeaderInputEl: HTMLInputElement | null = null;
   private dragging = false;
   private rafHandle: number | null = null;
   private lastClickTime = 0;
   private lastClickPos: CellPos | null = null;
-  private lastHeaderClickTime = 0;
-  private lastHeaderClickCol: number | null = null;
+  /** Adopted from setData()'s options bag — purely for rendering the correct per-column sort
+   * icon; Grid never acts on this itself (main.ts owns and applies sort, see renderTabIntoGrid). */
+  private sort: SortState | null = null;
 
   constructor(container: HTMLElement, options: GridOptions) {
     this.container = container;
@@ -114,12 +119,12 @@ export class Grid {
     this.scrollEl.addEventListener('keydown', this.handleKeyDown);
     this.scrollEl.addEventListener('mousedown', this.handleMouseDown);
     this.scrollEl.addEventListener('contextmenu', this.handleContextMenu);
-    // Separate from handleMouseDown: headers aren't part of the cell-selection/range-drag model,
-    // so a dedicated handler is simpler than threading a header branch through that one.
-    this.headerCellsEl.addEventListener('mousedown', this.handleHeaderMouseDown);
-    // Delegated, not per-zone: zone divs are rebuilt on every render along with the header/gutter
-    // cells themselves, so a single listener on the stable parent avoids re-attaching per render.
+    // Delegated, not per-zone/button: header cells (and their sort/options buttons) and the
+    // insert-zone divs are all rebuilt on every render, so a single listener per stable parent
+    // avoids re-attaching per render.
     this.headerCellsEl.addEventListener('click', this.handleInsertColClick);
+    this.headerCellsEl.addEventListener('click', this.handleSortBtnClick);
+    this.headerCellsEl.addEventListener('click', this.handleOptionsBtnClick);
     this.gutterWrap.addEventListener('click', this.handleInsertRowClick);
     // Not a native 'dblclick' listener: handleMouseDown does a synchronous full re-render on
     // every click (replacing the cell's DOM node), and Chromium's native double-click detection
@@ -142,8 +147,9 @@ export class Grid {
    * the new data's bounds, which otherwise leaks e.g. a 3x3 range from tab A into tab B as a
    * same-shaped range clamped to fit, even though nothing was ever selected there.
    */
-  setData(data: DataModel, options?: { resetSelection?: boolean }): void {
+  setData(data: DataModel, options?: { resetSelection?: boolean; sort?: SortState | null }): void {
     this.data = data;
+    this.sort = options?.sort ?? null;
     if (options?.resetSelection) {
       this.active = null;
       this.anchor = null;
@@ -208,7 +214,6 @@ export class Grid {
    */
   commitPendingEdit(): void {
     this.commitEdit();
-    this.commitHeaderEdit();
   }
 
   destroy(): void {
@@ -216,8 +221,9 @@ export class Grid {
     this.scrollEl.removeEventListener('keydown', this.handleKeyDown);
     this.scrollEl.removeEventListener('mousedown', this.handleMouseDown);
     this.scrollEl.removeEventListener('contextmenu', this.handleContextMenu);
-    this.headerCellsEl.removeEventListener('mousedown', this.handleHeaderMouseDown);
     this.headerCellsEl.removeEventListener('click', this.handleInsertColClick);
+    this.headerCellsEl.removeEventListener('click', this.handleSortBtnClick);
+    this.headerCellsEl.removeEventListener('click', this.handleOptionsBtnClick);
     this.gutterWrap.removeEventListener('click', this.handleInsertRowClick);
     document.removeEventListener('copy', this.handleCopy);
     document.removeEventListener('cut', this.handleCut);
@@ -297,17 +303,32 @@ export class Grid {
       cell.style.width = `${COL_WIDTH}px`;
       cell.dataset.col = String(c);
 
-      if (this.editingHeader === c) {
-        const input = document.createElement('input');
-        input.className = 'grid-header-cell-input';
-        input.value = this.data.headers[c] ?? '';
-        input.addEventListener('keydown', this.handleHeaderInputKeyDown);
-        input.addEventListener('blur', this.handleHeaderInputBlur);
-        cell.appendChild(input);
-        this.activeHeaderInputEl = input;
-      } else {
-        cell.textContent = this.data.headers[c] ?? '';
+      const label = document.createElement('span');
+      label.className = 'grid-header-label';
+      label.textContent = this.data.headers[c] ?? '';
+      cell.appendChild(label);
+
+      const isSortedCol = this.sort?.sortBy === c;
+      const sortBtn = document.createElement('button');
+      sortBtn.type = 'button';
+      sortBtn.className = 'grid-header-icon-btn grid-header-sort-btn';
+      sortBtn.dataset.col = String(c);
+      sortBtn.title = isSortedCol ? `Sorted ${this.sort!.sortOrder === 'asc' ? 'ascending' : 'descending'} — click to change` : 'Click to sort';
+      const sortSvg = createIcon(isSortedCol ? arrowUpIcon : sortIcon);
+      if (isSortedCol) {
+        sortBtn.classList.add('active');
+        if (this.sort!.sortOrder === 'desc') sortSvg.classList.add('icon-rot-180');
       }
+      sortBtn.appendChild(sortSvg);
+      cell.appendChild(sortBtn);
+
+      const optionsBtn = document.createElement('button');
+      optionsBtn.type = 'button';
+      optionsBtn.className = 'grid-header-icon-btn grid-header-options-btn';
+      optionsBtn.dataset.col = String(c);
+      optionsBtn.title = 'Column options';
+      optionsBtn.appendChild(createIcon(dotsVerticalIcon));
+      cell.appendChild(optionsBtn);
 
       this.headerCellsEl.appendChild(cell);
     }
@@ -445,7 +466,6 @@ export class Grid {
   private startEdit(row: number, col: number, seed?: string): void {
     if (row < 0 || row >= this.data.rows.length || col < 0 || col >= this.data.headers.length) return;
     this.commitEdit();
-    this.commitHeaderEdit();
     this.editing = { row, col };
     // Render immediately (not via rAF) so the input exists synchronously below —
     // deferring this raced with fast keystrokes and dropped seeded characters.
@@ -475,43 +495,6 @@ export class Grid {
   private cancelEdit(): void {
     this.editing = null;
     this.activeInputEl = null;
-    this.renderNow();
-    this.scrollEl.focus();
-  }
-
-  /** Mirrors startEdit/commitEdit/cancelEdit for header cells — a parallel, not shared, state
-   * machine since header edits have no row and report through a separate onHeaderEdit callback. */
-  private startHeaderEdit(col: number, seed?: string): void {
-    if (col < 0 || col >= this.data.headers.length) return;
-    this.commitEdit();
-    this.commitHeaderEdit();
-    this.editingHeader = col;
-    this.renderNow();
-    const input = this.activeHeaderInputEl;
-    if (!input) return;
-    if (seed !== undefined) {
-      input.value = seed;
-      input.focus();
-      input.setSelectionRange(seed.length, seed.length);
-    } else {
-      input.focus();
-      input.select();
-    }
-  }
-
-  private commitHeaderEdit(): void {
-    if (this.editingHeader === null) return;
-    const col = this.editingHeader;
-    const input = this.activeHeaderInputEl;
-    this.editingHeader = null;
-    this.activeHeaderInputEl = null;
-    if (input) this.options.onHeaderEdit(col, input.value);
-    this.renderNow();
-  }
-
-  private cancelHeaderEdit(): void {
-    this.editingHeader = null;
-    this.activeHeaderInputEl = null;
     this.renderNow();
     this.scrollEl.focus();
   }
@@ -597,30 +580,23 @@ export class Grid {
     document.addEventListener('mouseup', onUp);
   };
 
-  /** Double-click detection mirrors handleMouseDown's (time + position, not native dblclick —
-   * renderHeader() replaces every header cell's DOM node on each render, same reason native
-   * dblclick doesn't fire for data cells either). A single click is left as a no-op: clicking a
-   * non-focusable header div still blurs whatever cell/header input was focused, which already
-   * commits it via the input's own blur handler — no explicit commit needed here for that case. */
-  private handleHeaderMouseDown = (event: MouseEvent): void => {
-    if (event.button !== 0) return;
-    const target = (event.target as HTMLElement).closest<HTMLElement>('.grid-header-cell');
-    if (!target) return;
-    const col = Number(target.dataset.col);
+  private handleSortBtnClick = (event: MouseEvent): void => {
+    const btn = (event.target as HTMLElement).closest<HTMLElement>('.grid-header-sort-btn');
+    if (!btn) return;
+    event.stopPropagation();
+    this.options.onToggleSort(Number(btn.dataset.col));
+  };
 
-    const now = Date.now();
-    const isDoubleClick = this.lastHeaderClickCol === col && now - this.lastHeaderClickTime < DOUBLE_CLICK_MS;
-    this.lastHeaderClickTime = now;
-    this.lastHeaderClickCol = col;
-
-    if (isDoubleClick) {
-      event.preventDefault();
-      this.startHeaderEdit(col);
-    }
+  private handleOptionsBtnClick = (event: MouseEvent): void => {
+    const btn = (event.target as HTMLElement).closest<HTMLElement>('.grid-header-options-btn');
+    if (!btn) return;
+    event.stopPropagation();
+    const rect = btn.getBoundingClientRect();
+    this.options.onColumnOptions(Number(btn.dataset.col), rect.left, rect.bottom + 4);
   };
 
   /** A single click always inserts — no drag/selection/double-click ambiguity to resolve here,
-   * unlike handleHeaderMouseDown, so a plain delegated 'click' listener is enough. */
+   * so a plain delegated 'click' listener is enough. */
   private handleInsertColClick = (event: MouseEvent): void => {
     const zone = (event.target as HTMLElement).closest<HTMLElement>('.grid-insert-col-zone');
     if (!zone) return;
@@ -667,13 +643,12 @@ export class Grid {
   };
 
   private handleKeyDown = (event: KeyboardEvent): void => {
-    // While editing (a cell or a header), the input's own keydown listener owns
-    // Enter/Tab/Escape and the browser handles everything else natively. Without this guard,
-    // those keydown events bubble from the input (a descendant of scrollEl) right back into
-    // this handler and get processed a second time at the grid level — e.g. Ctrl+A while
-    // renaming a header would otherwise also trigger the grid's own select-all-cells handling,
-    // which re-renders and tears out the focused header input mid-edit.
-    if (this.editing || this.editingHeader !== null) return;
+    // While editing, the input's own keydown listener owns Enter/Tab/Escape/arrow-at-edge and the
+    // browser handles everything else natively. Without this guard, those keydown events bubble
+    // from the input (a descendant of scrollEl) right back into this handler and get processed a
+    // second time at the grid level — e.g. Ctrl+A while editing would otherwise also trigger the
+    // grid's own select-all-cells handling, which re-renders and tears out the focused input.
+    if (this.editing) return;
     if (!this.active) return;
     const ctrlOrCmd = event.ctrlKey || event.metaKey;
 
@@ -762,32 +737,6 @@ export class Grid {
 
   private handleInputBlur = (): void => {
     this.commitEdit();
-  };
-
-  private handleHeaderInputKeyDown = (event: KeyboardEvent): void => {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      event.stopPropagation();
-      this.commitHeaderEdit();
-      this.scrollEl.focus();
-    } else if (event.key === 'Tab') {
-      event.preventDefault();
-      event.stopPropagation();
-      const col = this.editingHeader;
-      this.commitHeaderEdit();
-      if (col !== null) {
-        const nextCol = clamp(col + (event.shiftKey ? -1 : 1), 0, this.data.headers.length - 1);
-        this.startHeaderEdit(nextCol);
-      }
-    } else if (event.key === 'Escape') {
-      event.preventDefault();
-      event.stopPropagation();
-      this.cancelHeaderEdit();
-    }
-  };
-
-  private handleHeaderInputBlur = (): void => {
-    this.commitHeaderEdit();
   };
 
   /**

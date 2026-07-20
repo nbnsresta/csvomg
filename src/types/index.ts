@@ -16,6 +16,13 @@ export interface Selection {
   endCol: number;
 }
 
+/** A discriminated union, not two independently-optional fields — when a sort is active, both
+ * are always present together; `null` means no sort at all. */
+export interface SortState {
+  sortBy: number;
+  sortOrder: 'asc' | 'desc';
+}
+
 export interface CellDiff {
   type: 'cell';
   row: number;

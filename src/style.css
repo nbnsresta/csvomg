@@ -557,15 +557,62 @@ footer#status-bar {
   height: var(--header-height);
   display: flex;
   align-items: center;
-  padding: 0 8px;
+  gap: 2px;
+  padding: 0 4px 0 8px;
   font-size: 11px;
   font-weight: 600;
   color: var(--text-secondary);
+  overflow: hidden;
+  border-right: 1px solid var(--border-color);
+  box-sizing: border-box;
+}
+
+.grid-header-label {
+  flex: 1;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  border-right: 1px solid var(--border-color);
-  box-sizing: border-box;
+}
+
+.grid-header-icon-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 2px;
+  border-radius: 3px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.grid-header-icon-btn:hover {
+  background-color: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.grid-header-icon-btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+.grid-header-sort-btn.active {
+  color: var(--accent);
+}
+
+.icon-rot-90 {
+  transform: rotate(90deg);
+}
+
+.icon-rot-180 {
+  transform: rotate(180deg);
+}
+
+.icon-rot-270 {
+  transform: rotate(270deg);
 }
 
 /* Nested sticky (left, inside a sticky-top ancestor) is the standard way to pin a corner cell. */
@@ -709,20 +756,6 @@ footer#status-bar {
   opacity: 1;
 }
 
-.grid-header-cell-input {
-  width: 100%;
-  height: 100%;
-  border: none;
-  outline: none;
-  background: transparent;
-  color: var(--text-primary);
-  font-family: inherit;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 0;
-  margin: 0;
-}
-
 /* Context Menu */
 .context-menu {
   position: fixed;
@@ -749,6 +782,15 @@ footer#status-bar {
   text-align: left;
   padding: 6px 10px;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.context-menu-item svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
 }
 
 .context-menu-item:hover:not(:disabled) {
