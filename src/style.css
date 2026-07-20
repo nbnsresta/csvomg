@@ -392,6 +392,70 @@ footer#status-bar {
 }
 /* --- end reconnect-tab feature CSS (reconnect-dialog) --- */
 
+/* Settings dialog — a real native <dialog>, unlike reconnect-dialog's hand-rolled overlay (see
+ * settings-dialog.ts for why). ::backdrop is the native dialog's own backdrop layer. */
+.settings-dialog {
+  width: 100%;
+  max-width: 380px;
+  margin: auto;
+  padding: 24px;
+  background-color: var(--surface-color);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+  color: var(--text-primary);
+}
+
+.settings-dialog::backdrop {
+  background-color: var(--overlay-backdrop);
+  backdrop-filter: blur(4px);
+}
+
+.settings-dialog h3 {
+  margin: 0 0 16px 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.settings-group {
+  border: none;
+  margin: 0 0 18px 0;
+  padding: 0;
+}
+
+.settings-group legend {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+  padding: 0;
+}
+
+.settings-group label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  margin-bottom: 6px;
+}
+
+.settings-group select {
+  appearance: none;
+  background-color: var(--surface-hover);
+  color: var(--text-primary);
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-family: inherit;
+  font-size: 13px;
+  margin-left: 8px;
+}
+
+.settings-done {
+  margin-top: 4px;
+}
+
 /* Buttons */
 .btn {
   appearance: none;
@@ -429,6 +493,31 @@ footer#status-bar {
 }
 .btn-secondary:hover {
   background-color: var(--border-color);
+}
+
+/* Generic icon-only button — toolbar Settings, and anywhere else an icon button needs the same
+ * subtle, no-border treatment (matches .tab-close/.grid-header-icon-btn's existing convention). */
+.icon-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.icon-btn:hover {
+  background-color: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.icon-btn svg {
+  width: 16px;
+  height: 16px;
 }
 
 /* Recent Files */

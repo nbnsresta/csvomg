@@ -4,7 +4,7 @@ export interface ParsedTable {
   delimiter: string;
 }
 
-const CANDIDATE_DELIMITERS = [',', '\t', ';', '|'];
+export const CANDIDATE_DELIMITERS = [',', '\t', ';', '|'];
 
 /** Guesses the field delimiter by counting occurrences (outside quotes) across sample lines. */
 export function detectDelimiter(text: string): string {

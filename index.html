@@ -12,6 +12,20 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+    <!-- Applies a stored theme preference before first paint, avoiding a flash of the wrong
+         theme — must run synchronously here; src/main.ts loads as a deferred module, after the
+         body has already rendered. See src/io/settings.ts (same storage key, same shape). -->
+    <script>
+      (function () {
+        try {
+          var settings = JSON.parse(localStorage.getItem('csvomg-settings'));
+          if (settings && (settings.theme === 'dark' || settings.theme === 'light')) {
+            document.documentElement.dataset.theme = settings.theme;
+          }
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <!-- App Shell -->
@@ -21,6 +35,7 @@
         <button id="btn-toolbar-new" class="btn btn-secondary">New</button>
         <button id="btn-toolbar-open" class="btn btn-secondary">Open...</button>
         <button id="btn-toolbar-save" class="btn btn-primary" disabled>Save</button>
+        <button id="btn-toolbar-settings" class="icon-btn" aria-label="Settings"></button>
       </div>
     </header>
     <nav id="tab-bar"></nav>

@@ -33,6 +33,9 @@ import { showContextMenu, type ContextMenuItem } from './ui/context-menu.ts';
 import { createFindBar } from './ui/find-bar.ts';
 import { Grid, type CellEdit, type ContextMenuTarget } from './ui/grid.ts';
 import { showReconnectDialog } from './ui/reconnect-dialog.ts';
+import { showSettingsDialog } from './ui/settings-dialog.ts';
+import { initToolbar } from './ui/toolbar.ts';
+import { loadSettings, saveSettings, type Settings } from './io/settings.ts';
 import type { DataModel, Diff, FileType, Mutation, Selection, SortState } from './types/index.ts';
 import pencilIcon from './icons/pencil.svg?raw';
 import columnInsertLeftIcon from './icons/column-insert-left.svg?raw';
@@ -46,9 +49,6 @@ const btnNewFile = document.getElementById('btn-new-file') as HTMLButtonElement;
 const pageDropOverlay = document.getElementById('page-drop-overlay') as HTMLDivElement;
 const statusSelection = document.getElementById('status-selection') as HTMLDivElement;
 const statusCounts = document.getElementById('status-counts') as HTMLDivElement;
-const btnToolbarNew = document.getElementById('btn-toolbar-new') as HTMLButtonElement;
-const btnToolbarOpen = document.getElementById('btn-toolbar-open') as HTMLButtonElement;
-const btnToolbarSave = document.getElementById('btn-toolbar-save') as HTMLButtonElement;
 const tabBar = document.getElementById('tab-bar') as HTMLElement;
 const recentFilesContainer = document.getElementById('recent-files-container') as HTMLDivElement;
 const recentFilesList = document.getElementById('recent-files-list') as HTMLUListElement;
@@ -88,6 +88,10 @@ interface DocTab {
    * getColumnWidths(tab), never indexed directly, since it may be shorter than the current
    * column count. Not persisted across a reload, same as `sort`/`find`. */
   columnWidths: number[];
+  /** Pending debounced auto-save write, if any — see applyTabUpdate()/attemptAutoSave(). Cleared
+   * unconditionally on tab close so a lingering timer can't write discarded content back to the
+   * real linked file after the user's already told the app to discard it. */
+  autoSaveTimer?: ReturnType<typeof setTimeout>;
   // --- reconnect-tab feature (retry #2, 2026-07-17): easy to fully revert, see STATUS.md ---
   /** True when restored from session with an unconfirmed handle permission — no content loaded yet, shown as a dimmed tab that reconnects on click. */
   needsReconnect?: boolean;
@@ -97,6 +101,7 @@ interface DocTab {
 const MAX_TABS = 10;
 let tabs: DocTab[] = [];
 let activeTabId: string | null = null;
+let settings: Settings = loadSettings();
 
 function getActiveTab(): DocTab | null {
   return tabs.find((t) => t.id === activeTabId) ?? null;
@@ -155,6 +160,19 @@ const grid = new Grid(gridContainer, {
   onContextMenu: handleContextMenu,
   onUndo: performUndo,
   onRedo: performRedo,
+});
+
+function handleSettingsChange(next: Settings): void {
+  settings = next;
+  saveSettings(next);
+  document.documentElement.dataset.theme = next.theme;
+}
+
+const toolbar = initToolbar({
+  onNew: newFile,
+  onOpen: () => void openFileDialog(),
+  onSave: () => void save(),
+  onSettings: () => showSettingsDialog(settings, handleSettingsChange),
 });
 
 interface FindMatch {
@@ -602,6 +620,10 @@ function reconnectTab(id: string): void {
 function closeTab(id: string): void {
   const tab = tabs.find((t) => t.id === id);
   if (!tab) return;
+  // Unconditional, before the discard confirmation below — a lingering timer firing after the
+  // user's explicitly discarded this tab's content would silently write it back to the real
+  // linked file, which would be a correctness bug, not just a wasted write.
+  clearTimeout(tab.autoSaveTimer);
   // Tracks whether the confirm below actually fired (and was accepted) — a freshly opened,
   // never-edited handle-less tab (e.g. a fallback-mode dropped/opened file, dirty: false) can
   // have real content too, but wasn't dirty, so it never hit the dialog at all.
@@ -737,7 +759,7 @@ function newFile(): void {
   if (!canOpenNewTab()) return;
   const tab: DocTab = {
     id: crypto.randomUUID(),
-    data: normalizeTrailingBuffer(createDataModel([], [], nextUntitledName(), ',')).data,
+    data: normalizeTrailingBuffer(createDataModel([], [], nextUntitledName(), settings.defaultDelimiter)).data,
     handle: null,
     fileType: 'csv',
     dirty: true,
@@ -751,7 +773,25 @@ function newFile(): void {
   void saveDraft(tab.id, tab.data, tab.fileType).catch((err) => console.error('draft autosave failed', err));
 }
 
-/** Applies a resolved DataModel to the active tab: dirty flag, grid render, status, draft autosave. */
+const AUTO_SAVE_DEBOUNCE_MS = 1500;
+
+/** Writes straight to the linked file, bypassing save()'s fallback-to-Save-As-picker-on-failure
+ * behavior — popping a native file picker unprompted from a background timer would be jarring.
+ * A failure here just leaves the tab dirty, exactly as if auto-save didn't exist for this one
+ * attempt; the user can still Ctrl+S manually. */
+async function attemptAutoSave(tab: DocTab): Promise<void> {
+  if (!tab.handle) return;
+  try {
+    await fs.saveToHandle(tab.handle, serializeTab(tab));
+    tab.dirty = false;
+    updateStatus();
+  } catch (err) {
+    console.error('auto-save failed', err);
+  }
+}
+
+/** Applies a resolved DataModel to the active tab: dirty flag, grid render, status, draft
+ * autosave, and — if enabled — a debounced write-back to the linked file. */
 function applyTabUpdate(tab: DocTab, data: DataModel): void {
   tab.data = data;
   tab.dirty = true;
@@ -759,6 +799,9 @@ function applyTabUpdate(tab: DocTab, data: DataModel): void {
   updateStatus();
   if (!tab.handle) {
     void saveDraft(tab.id, tab.data, tab.fileType).catch((err) => console.error('draft autosave failed', err));
+  } else if (settings.autoSave) {
+    clearTimeout(tab.autoSaveTimer);
+    tab.autoSaveTimer = setTimeout(() => void attemptAutoSave(tab), AUTO_SAVE_DEBOUNCE_MS);
   }
 }
 
@@ -1085,7 +1128,7 @@ function updateSelectionStatus(sel: Selection | null): void {
 
 function updateStatus(): void {
   const tab = getActiveTab();
-  btnToolbarSave.disabled = !tab;
+  toolbar.setSaveEnabled(!!tab);
   // grid.setData() (tab switch) and grid.refresh() don't themselves fire onSelectionChange, so
   // this is the one place — called on every mutation and every tab switch — that keeps the
   // status bar's selection text from going stale relative to whichever tab is actually active.
@@ -1108,9 +1151,6 @@ function updateStatus(): void {
 
 btnOpenFile.addEventListener('click', () => void openFileDialog());
 btnNewFile.addEventListener('click', newFile);
-btnToolbarOpen.addEventListener('click', () => void openFileDialog());
-btnToolbarNew.addEventListener('click', newFile);
-btnToolbarSave.addEventListener('click', () => void save());
 
 // Whole page acts as a drop target (Google Drive/Photos-style), regardless of whether the
 // landing page or a document tab is currently showing. A dragenter/dragleave depth counter is
