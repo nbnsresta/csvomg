@@ -12,13 +12,12 @@ const GUTTER_WIDTH = 48;
 const COL_WIDTH = 140;
 const OVERSCAN = 4;
 const DOUBLE_CLICK_MS = 400;
-// Hover "+" hit-zone straddling a boundary between two headers/gutter cells.
+// Width of a boundary hit-zone straddling two headers/gutter cells — the row-insert "+" and the
+// column-resize handle both use this for a consistent hit-target size.
 const INSERT_ZONE_SIZE = 12;
 // Small enough to be a deliberate choice, large enough to keep the header's sort + options
 // buttons plus a sliver of label visible.
 const MIN_COL_WIDTH = 60;
-// Mousedown-then-move-this-far on a column boundary zone means "resize", not "click to insert".
-const RESIZE_DRAG_THRESHOLD = 4;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -42,8 +41,9 @@ export interface CellEdit {
 
 export interface GridOptions {
   onCellEdit: (row: number, col: number, value: string) => void;
-  /** Hover "+" between two column headers / two gutter cells — inserts before the given index. */
-  onInsertColumn: (col: number) => void;
+  /** Hover "+" between two row-gutter cells — inserts before the given index. Columns dropped
+   * this in favor of resize (they conflicted at the same boundary) — still reachable via the
+   * right-click / options menu's Insert column left/right. */
   onInsertRow: (row: number) => void;
   /** Header sort-icon click — cycles asc → desc → none for that column. */
   onToggleSort: (col: number) => void;
@@ -137,7 +137,7 @@ export class Grid {
     // Delegated, not per-zone/button: header cells (and their sort/options buttons) and the
     // insert-zone divs are all rebuilt on every render, so a single listener per stable parent
     // avoids re-attaching per render.
-    this.headerCellsEl.addEventListener('mousedown', this.handleColZoneMouseDown);
+    this.headerCellsEl.addEventListener('mousedown', this.handleColResizeMouseDown);
     this.headerCellsEl.addEventListener('click', this.handleSortBtnClick);
     this.headerCellsEl.addEventListener('click', this.handleOptionsBtnClick);
     this.gutterWrap.addEventListener('click', this.handleInsertRowClick);
@@ -241,7 +241,7 @@ export class Grid {
     this.scrollEl.removeEventListener('keydown', this.handleKeyDown);
     this.scrollEl.removeEventListener('mousedown', this.handleMouseDown);
     this.scrollEl.removeEventListener('contextmenu', this.handleContextMenu);
-    this.headerCellsEl.removeEventListener('mousedown', this.handleColZoneMouseDown);
+    this.headerCellsEl.removeEventListener('mousedown', this.handleColResizeMouseDown);
     this.headerCellsEl.removeEventListener('click', this.handleSortBtnClick);
     this.headerCellsEl.removeEventListener('click', this.handleOptionsBtnClick);
     this.gutterWrap.removeEventListener('click', this.handleInsertRowClick);
@@ -373,33 +373,20 @@ export class Grid {
     }
 
     // Sibling of the cells above (not nested inside one) — .grid-header-cell has
-    // overflow: hidden, which would clip a "+" straddling into the neighboring cell.
-    // Dual-purpose: a plain click inserts a column (unchanged); a drag resizes the column to its
-    // left (col - 1) — see handleColZoneMouseDown. Internal boundaries only (not before the first
-    // or after the last column) since "insert before the first / after the last" isn't part of
-    // this affordance — right-click on the edge cell already covers that.
+    // overflow: hidden, which would clip a zone straddling into the neighboring cell. One per
+    // column's right edge — boundary i resizes column i - 1. Unlike the old insert-"+" zones this
+    // replaced, there's no "not before the first / after the last" asymmetry to exclude: every
+    // column 0..colCount-1 has a right edge, i.e. boundaries 1..colCount.
     const colCount = this.data.headers.length;
     const firstBoundary = Math.max(1, firstCol);
-    const lastBoundary = Math.min(colCount - 1, lastCol + 1);
+    const lastBoundary = Math.min(colCount, lastCol + 1);
     for (let i = firstBoundary; i <= lastBoundary; i++) {
       const zone = document.createElement('div');
-      zone.className = 'grid-insert-col-zone';
+      zone.className = 'grid-col-resize-zone';
       zone.style.left = `${GUTTER_WIDTH + this.colOffsets[i] - INSERT_ZONE_SIZE / 2}px`;
       zone.style.width = `${INSERT_ZONE_SIZE}px`;
-      zone.dataset.insertCol = String(i);
-      zone.appendChild(createIcon(plusIcon));
+      zone.dataset.resizeCol = String(i - 1);
       this.headerCellsEl.appendChild(zone);
-    }
-
-    // The last column has no insert zone (insert zones stop one short of the outer edge), but it
-    // still needs its own trailing edge to be resizable — a resize-only zone, no insert fallback.
-    if (lastCol === colCount - 1 && colCount > 0) {
-      const edge = document.createElement('div');
-      edge.className = 'grid-col-resize-edge';
-      edge.style.left = `${GUTTER_WIDTH + this.colOffsets[colCount] - INSERT_ZONE_SIZE / 2}px`;
-      edge.style.width = `${INSERT_ZONE_SIZE}px`;
-      edge.dataset.resizeCol = String(colCount - 1);
-      this.headerCellsEl.appendChild(edge);
     }
   }
 
@@ -649,33 +636,20 @@ export class Grid {
     this.options.onColumnOptions(Number(btn.dataset.col), rect.left, rect.bottom + 4);
   };
 
-  /**
-   * Dual-purpose, disambiguated by movement (same technique handleMouseDown already uses to tell
-   * a click from a drag-select): a plain click on `.grid-insert-col-zone` inserts a column,
-   * unchanged; a drag resizes instead. `.grid-col-resize-edge` (the last column's own trailing
-   * edge, which has no insert affordance) only ever resizes.
-   */
-  private handleColZoneMouseDown = (event: MouseEvent): void => {
-    const target = event.target as HTMLElement;
-    const insertZone = target.closest<HTMLElement>('.grid-insert-col-zone');
-    const resizeEdge = target.closest<HTMLElement>('.grid-col-resize-edge');
-    const zone = insertZone ?? resizeEdge;
+  /** Purely a drag handle — no click behavior competes for this zone (that's what made the old
+   * insert-"+" zone here a problem: an insert click and a resize drag wanted the same boundary). */
+  private handleColResizeMouseDown = (event: MouseEvent): void => {
+    const zone = (event.target as HTMLElement).closest<HTMLElement>('.grid-col-resize-zone');
     if (!zone || event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
 
-    const insertCol = insertZone ? Number(insertZone.dataset.insertCol) : null;
-    // The boundary at index `col` sits at that column's right edge — resizing the column to its
-    // left is the standard convention. The resize-only edge already carries the real column index.
-    const resizeCol = insertZone ? insertCol! - 1 : Number(resizeEdge!.dataset.resizeCol);
+    const resizeCol = Number(zone.dataset.resizeCol);
     const startX = event.clientX;
     const startWidth = this.columnWidths[resizeCol] ?? COL_WIDTH;
-    let resized = false;
 
     const onMove = (moveEvent: MouseEvent): void => {
       const delta = moveEvent.clientX - startX;
-      if (!resized && Math.abs(delta) < RESIZE_DRAG_THRESHOLD) return;
-      resized = true;
       this.columnWidths[resizeCol] = Math.max(MIN_COL_WIDTH, startWidth + delta);
       this.recomputeColOffsets();
       this.updateSizer();
@@ -684,10 +658,8 @@ export class Grid {
     const onUp = (): void => {
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
-      if (resized) {
+      if (this.columnWidths[resizeCol] !== startWidth) {
         this.options.onColumnResize(resizeCol, this.columnWidths[resizeCol]);
-      } else if (insertCol !== null) {
-        this.options.onInsertColumn(insertCol);
       }
     };
     document.addEventListener('mousemove', onMove);

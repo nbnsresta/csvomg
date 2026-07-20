@@ -146,7 +146,6 @@ function persistSession(): void {
 
 const grid = new Grid(gridContainer, {
   onCellEdit: handleCellEdit,
-  onInsertColumn: handleInsertColumn,
   onInsertRow: handleInsertRow,
   onToggleSort: handleToggleSort,
   onColumnOptions: handleColumnOptions,
@@ -828,14 +827,6 @@ function handleColumnResize(col: number, width: number): void {
   widths[col] = width;
   tab.columnWidths = widths;
   renderTabIntoGrid(tab);
-}
-
-/** Hover "+" between two column headers / gutter cells (grid.ts) — inserts blank at the boundary. */
-function handleInsertColumn(col: number): void {
-  const tab = getActiveTab();
-  if (!tab) return;
-  const mutation = insertColumn(tab.data, col);
-  commitMutation(mutation.data, mutation.diff);
 }
 
 function handleInsertRow(row: number): void {
