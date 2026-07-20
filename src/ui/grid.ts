@@ -14,7 +14,7 @@ const OVERSCAN = 4;
 const DOUBLE_CLICK_MS = 400;
 // Width of a boundary hit-zone straddling two headers/gutter cells — the row-insert "+" and the
 // column-resize handle both use this for a consistent hit-target size.
-const INSERT_ZONE_SIZE = 12;
+const INSERT_ZONE_SIZE = 4;
 // Small enough to be a deliberate choice, large enough to keep the header's sort + options
 // buttons plus a sliver of label visible.
 const MIN_COL_WIDTH = 60;
@@ -95,6 +95,11 @@ export class Grid {
    * changes (setData, and every step of a live resize drag) so render()/scrollActiveIntoView()
    * don't each re-derive it. */
   private colOffsets: number[] = [0];
+  /** The column currently being drag-resized, if any — driven by JS, not CSS :hover. Resize
+   * zones are torn down and rebuilt on every render (renderHeader() replaces all of them), which
+   * happens on every mousemove during a drag; a freshly recreated node under a fast-moving cursor
+   * doesn't reliably keep matching :hover, so the highlight needs to be state-driven instead. */
+  private resizingCol: number | null = null;
 
   constructor(container: HTMLElement, options: GridOptions) {
     this.container = container;
@@ -383,6 +388,7 @@ export class Grid {
     for (let i = firstBoundary; i <= lastBoundary; i++) {
       const zone = document.createElement('div');
       zone.className = 'grid-col-resize-zone';
+      if (i - 1 === this.resizingCol) zone.classList.add('resizing');
       zone.style.left = `${GUTTER_WIDTH + this.colOffsets[i] - INSERT_ZONE_SIZE / 2}px`;
       zone.style.width = `${INSERT_ZONE_SIZE}px`;
       zone.dataset.resizeCol = String(i - 1);
@@ -647,6 +653,10 @@ export class Grid {
     const resizeCol = Number(zone.dataset.resizeCol);
     const startX = event.clientX;
     const startWidth = this.columnWidths[resizeCol] ?? COL_WIDTH;
+    // Set before the first render so the highlight is visible immediately on mousedown, not only
+    // once the first mousemove lands.
+    this.resizingCol = resizeCol;
+    this.renderNow();
 
     const onMove = (moveEvent: MouseEvent): void => {
       const delta = moveEvent.clientX - startX;
@@ -658,6 +668,8 @@ export class Grid {
     const onUp = (): void => {
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
+      this.resizingCol = null;
+      this.renderNow();
       if (this.columnWidths[resizeCol] !== startWidth) {
         this.options.onColumnResize(resizeCol, this.columnWidths[resizeCol]);
       }

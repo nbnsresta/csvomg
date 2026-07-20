@@ -725,8 +725,8 @@ footer#status-bar {
   z-index: 1;
 }
 
-.grid-col-resize-zone:hover {
-  background-color: var(--surface-hover);
+.grid-col-resize-zone:hover, .grid-col-resize-zone.resizing {
+  background-color: var(--accent);
 }
 
 /*
