@@ -1,5 +1,5 @@
 import { DRAFTS_STORE, runTransaction } from './local-db.ts';
-import type { DataModel, FileType } from '../types/index.ts';
+import type { ColumnType, DataModel, FileType } from '../types/index.ts';
 
 /**
  * Shadow-persists handle-less ("New") tabs to browser-local storage so they survive an
@@ -17,6 +17,7 @@ export interface DraftRecord {
   filename: string;
   delimiter: string;
   fileType: FileType;
+  columnTypes?: Record<string, ColumnType>;
 }
 
 export async function saveDraft(id: string, data: DataModel, fileType: FileType): Promise<void> {
@@ -27,6 +28,7 @@ export async function saveDraft(id: string, data: DataModel, fileType: FileType)
     filename: data.meta.filename,
     delimiter: data.meta.delimiter,
     fileType,
+    ...(data.meta.columnTypes ? { columnTypes: data.meta.columnTypes } : {}),
   };
   await runTransaction(DRAFTS_STORE, 'readwrite', (store) => store.put(record));
 }

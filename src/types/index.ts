@@ -1,11 +1,16 @@
 export type FileType = 'csv' | 'json';
 
+/** JSON-import type profile for a column, used to serialize it back out as the right JSON type
+ * on export instead of always as a string. CSV has no notion of this — always 'text' there. */
+export type ColumnType = 'text' | 'number' | 'boolean';
+
 export interface DataModel {
   headers: string[];
   rows: string[][];
   meta: {
     filename: string;
     delimiter: string;
+    columnTypes?: Record<string, ColumnType>;
   };
 }
 

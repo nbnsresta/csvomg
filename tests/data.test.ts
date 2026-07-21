@@ -6,6 +6,7 @@ import {
   createDataModel,
   deleteColumn,
   deleteRow,
+  downgradeColumnsToText,
   duplicateRow,
   hasContent,
   insertColumn,
@@ -110,6 +111,34 @@ describe('renameColumn', () => {
     const { data, diff } = renameColumn(original, 0, 'alpha');
     expect(data.headers).toEqual(['alpha', 'b']);
     expect(undoDiff(data, diff)).toEqual(original);
+  });
+
+  it('moves a column-type profile entry to the new header name', () => {
+    const original = createDataModel(['price'], [['9.5']], 'test.json', ',', { price: 'number' });
+    const { data } = renameColumn(original, 0, 'cost');
+    expect(data.meta.columnTypes).toEqual({ cost: 'number' });
+  });
+});
+
+describe('downgradeColumnsToText', () => {
+  it('drops the given columns from the type profile so they default to text', () => {
+    const original = createDataModel(['price', 'active'], [['9.5', 'true']], 'test.json', ',', {
+      price: 'number',
+      active: 'boolean',
+    });
+    const downgraded = downgradeColumnsToText(original, ['price']);
+    expect(downgraded.meta.columnTypes).toEqual({ active: 'boolean' });
+  });
+
+  it('is a no-op when none of the given columns are typed', () => {
+    const original = createDataModel(['name'], [['Acme']], 'test.json', ',', {});
+    const downgraded = downgradeColumnsToText(original, ['name']);
+    expect(downgraded).toEqual(original);
+  });
+
+  it('is a no-op when there is no column-type profile at all', () => {
+    const original = sample();
+    expect(downgradeColumnsToText(original, ['a'])).toEqual(original);
   });
 });
 

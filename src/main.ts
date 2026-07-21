@@ -5,6 +5,7 @@ import {
   createDataModel,
   deleteColumn,
   deleteRow,
+  downgradeColumnsToText,
   duplicateRow,
   hasContent,
   insertColumn,
@@ -17,7 +18,7 @@ import {
   trimTrailingBlank,
 } from './core/data.ts';
 import { createHistory, pushGroup, redo, undo, type History } from './core/history.ts';
-import { parseCSV, parseJSON, serializeCSV, serializeJSON } from './core/parser.ts';
+import { findTypeMismatchedColumns, parseCSV, parseJSON, serializeCSV, serializeJSON } from './core/parser.ts';
 import { deleteDraft, loadDraft, saveDraft } from './io/drafts.ts';
 import {
   listRecentFiles,
@@ -30,6 +31,7 @@ import { clearSession, loadSession, saveSession, type SessionState } from './io/
 import { openDroppedFile, webFileSystemAdapter } from './io/web-fs.ts';
 import type { FileHandle, OpenedFile } from './io/types.ts';
 import { showContextMenu, type ContextMenuItem } from './ui/context-menu.ts';
+import { showExportMismatchDialog } from './ui/export-dialog.ts';
 import { createFindBar } from './ui/find-bar.ts';
 import { Grid, type CellEdit, type ContextMenuTarget } from './ui/grid.ts';
 import { showReconnectDialog } from './ui/reconnect-dialog.ts';
@@ -48,6 +50,7 @@ const btnOpenFile = document.getElementById('btn-open-file') as HTMLButtonElemen
 const btnNewFile = document.getElementById('btn-new-file') as HTMLButtonElement;
 const pageDropOverlay = document.getElementById('page-drop-overlay') as HTMLDivElement;
 const statusSelection = document.getElementById('status-selection') as HTMLDivElement;
+const statusWarning = document.getElementById('status-warning') as HTMLButtonElement;
 const statusCounts = document.getElementById('status-counts') as HTMLDivElement;
 const tabBar = document.getElementById('tab-bar') as HTMLElement;
 const recentFilesContainer = document.getElementById('recent-files-container') as HTMLDivElement;
@@ -92,6 +95,11 @@ interface DocTab {
    * unconditionally on tab close so a lingering timer can't write discarded content back to the
    * real linked file after the user's already told the app to discard it. */
   autoSaveTimer?: ReturnType<typeof setTimeout>;
+  /** True when auto-save skipped its last attempt because a JSON column no longer matches its
+   * profiled type (see findTypeMismatchedColumns) — writing anyway would silently downgrade/mix
+   * types with no confirmation. Surfaced via the status bar; cleared once a manual save resolves
+   * it (or auto-save is turned off entirely, see handleSettingsChange). */
+  autoSaveBlocked?: boolean;
   // --- reconnect-tab feature (retry #2, 2026-07-17): easy to fully revert, see STATUS.md ---
   /** True when restored from session with an unconfirmed handle permission — no content loaded yet, shown as a dimmed tab that reconnects on click. */
   needsReconnect?: boolean;
@@ -163,15 +171,22 @@ const grid = new Grid(gridContainer, {
 });
 
 function handleSettingsChange(next: Settings): void {
+  const turningAutoSaveOff = settings.autoSave && !next.autoSave;
   settings = next;
   saveSettings(next);
   document.documentElement.dataset.theme = next.theme;
+  // A stale "auto-save paused" status message would otherwise survive auto-save being disabled.
+  if (turningAutoSaveOff) {
+    for (const t of tabs) t.autoSaveBlocked = false;
+    updateStatus();
+  }
 }
 
 const toolbar = initToolbar({
   onNew: newFile,
   onOpen: () => void openFileDialog(),
   onSave: () => void save(),
+  onSaveAs: () => void saveAs(),
   onSettings: () => showSettingsDialog(settings, handleSettingsChange),
 });
 
@@ -367,8 +382,8 @@ function detectFileType(filename: string): FileType {
 function parseOpenedFile(opened: OpenedFile): { data: DataModel; type: FileType } {
   const type = detectFileType(opened.name);
   if (type === 'json') {
-    const { headers, rows } = parseJSON(opened.text);
-    return { data: createDataModel(headers, rows, opened.name, ','), type };
+    const { headers, rows, columnTypes } = parseJSON(opened.text);
+    return { data: createDataModel(headers, rows, opened.name, ',', columnTypes), type };
   }
   const { headers, rows, delimiter } = parseCSV(opened.text);
   return { data: createDataModel(headers, rows, opened.name, delimiter), type };
@@ -391,7 +406,9 @@ async function reconnectFileHandle(handle: FileSystemFileHandle): Promise<{ data
  * running buffer of blank trailing rows/columns untouched. */
 function serializeTab(tab: DocTab): string {
   const data = trimTrailingBlank(tab.data);
-  return tab.fileType === 'json' ? serializeJSON(data.headers, data.rows) : serializeCSV(data.headers, data.rows, data.meta.delimiter);
+  return tab.fileType === 'json'
+    ? serializeJSON(data.headers, data.rows, data.meta.columnTypes)
+    : serializeCSV(data.headers, data.rows, data.meta.delimiter);
 }
 
 function showGrid(): void {
@@ -478,7 +495,9 @@ async function reopenRecentFile(entry: RecentFileEntry): Promise<void> {
       await refreshRecentFilesUI();
       return;
     }
-    const data = normalizeTrailingBuffer(createDataModel(draft.headers, draft.rows, draft.filename, draft.delimiter)).data;
+    const data = normalizeTrailingBuffer(
+      createDataModel(draft.headers, draft.rows, draft.filename, draft.delimiter, draft.columnTypes),
+    ).data;
     tabs.push({ id: entry.id, data, handle: null, fileType: draft.fileType, dirty: true, history: createHistory(), find: createFindState(), sort: null, columnWidths: [] });
     activateTab(entry.id);
     return;
@@ -781,6 +800,20 @@ const AUTO_SAVE_DEBOUNCE_MS = 1500;
  * attempt; the user can still Ctrl+S manually. */
 async function attemptAutoSave(tab: DocTab): Promise<void> {
   if (!tab.handle) return;
+  // A JSON column no longer matching its profiled type would otherwise get silently written as
+  // mixed types (or silently downgraded to text) with no confirmation — pause instead and let a
+  // manual save (which does prompt) resolve it. See findTypeMismatchedColumns/showExportMismatchDialog.
+  if (tab.fileType === 'json' && findTypeMismatchedColumns(tab.data.headers, tab.data.rows, tab.data.meta.columnTypes).length > 0) {
+    if (!tab.autoSaveBlocked) {
+      tab.autoSaveBlocked = true;
+      updateStatus();
+    }
+    return;
+  }
+  if (tab.autoSaveBlocked) {
+    tab.autoSaveBlocked = false;
+    updateStatus();
+  }
   try {
     await fs.saveToHandle(tab.handle, serializeTab(tab));
     tab.dirty = false;
@@ -1073,10 +1106,30 @@ async function openFileDialog(): Promise<void> {
   loadFile(opened[0]);
 }
 
+/** Gates an interactive JSON save behind a confirmation when a column no longer matches its
+ * profiled type — see findTypeMismatchedColumns. `proceed` runs immediately for CSV tabs and for
+ * a JSON tab with no mismatches (the common, "straightforward" case); otherwise it only runs
+ * after the user confirms showExportMismatchDialog(), which also permanently downgrades the
+ * affected columns to text so later saves (including auto-save) don't re-flag them. */
+function withMismatchCheck(tab: DocTab, proceed: () => void): void {
+  if (tab.fileType !== 'json') return proceed();
+  const mismatched = findTypeMismatchedColumns(tab.data.headers, tab.data.rows, tab.data.meta.columnTypes);
+  if (mismatched.length === 0) return proceed();
+  showExportMismatchDialog(mismatched, () => {
+    tab.data = downgradeColumnsToText(tab.data, mismatched);
+    tab.autoSaveBlocked = false;
+    proceed();
+  });
+}
+
 async function save(): Promise<void> {
   grid.commitPendingEdit();
   const tab = getActiveTab();
   if (!tab) return;
+  withMismatchCheck(tab, () => void performSave(tab));
+}
+
+async function performSave(tab: DocTab): Promise<void> {
   const text = serializeTab(tab);
   if (tab.handle) {
     try {
@@ -1088,13 +1141,17 @@ async function save(): Promise<void> {
       // Permission may have been revoked; fall through to Save As.
     }
   }
-  await saveAs();
+  await performSaveAs(tab);
 }
 
 async function saveAs(): Promise<void> {
   grid.commitPendingEdit();
   const tab = getActiveTab();
   if (!tab) return;
+  withMismatchCheck(tab, () => void performSaveAs(tab));
+}
+
+async function performSaveAs(tab: DocTab): Promise<void> {
   const text = serializeTab(tab);
   const result = await fs.saveFileAs(text, tab.data.meta.filename);
   if (result) {
@@ -1126,6 +1183,12 @@ function updateSelectionStatus(sel: Selection | null): void {
   statusSelection.textContent = formatSelection(sel);
 }
 
+function updateSaveWarning(tab: DocTab | null): void {
+  const blocked = !!tab?.autoSaveBlocked;
+  statusWarning.classList.toggle('hidden', !blocked);
+  statusWarning.textContent = blocked ? 'Auto-save paused — type mismatch. Click or press Ctrl/Cmd+S to fix.' : '';
+}
+
 function updateStatus(): void {
   const tab = getActiveTab();
   toolbar.setSaveEnabled(!!tab);
@@ -1133,6 +1196,7 @@ function updateStatus(): void {
   // this is the one place — called on every mutation and every tab switch — that keeps the
   // status bar's selection text from going stale relative to whichever tab is actually active.
   updateSelectionStatus(tab ? grid.getSelection() : null);
+  updateSaveWarning(tab);
 
   if (!tab) {
     statusCounts.textContent = '';
@@ -1151,6 +1215,7 @@ function updateStatus(): void {
 
 btnOpenFile.addEventListener('click', () => void openFileDialog());
 btnNewFile.addEventListener('click', newFile);
+statusWarning.addEventListener('click', () => void save());
 
 // Whole page acts as a drop target (Google Drive/Photos-style), regardless of whether the
 // landing page or a document tab is currently showing. A dragenter/dragleave depth counter is
@@ -1228,7 +1293,7 @@ async function restoreSession(): Promise<void> {
     if (ref.kind === 'draft') {
       const draft = await loadDraft(ref.id).catch(() => null);
       if (!draft) continue;
-      const rawData = createDataModel(draft.headers, draft.rows, draft.filename, draft.delimiter);
+      const rawData = createDataModel(draft.headers, draft.rows, draft.filename, draft.delimiter, draft.columnTypes);
       if (!hasContent(rawData)) continue;
       const data = normalizeTrailingBuffer(rawData).data;
       tabs.push({ id: ref.id, data, handle: null, fileType: draft.fileType, dirty: true, history: createHistory(), find: createFindState(), sort: null, columnWidths: [] });

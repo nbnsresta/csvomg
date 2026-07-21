@@ -34,7 +34,10 @@
       <div class="toolbar-actions">
         <button id="btn-toolbar-new" class="btn btn-secondary">New</button>
         <button id="btn-toolbar-open" class="btn btn-secondary">Open...</button>
-        <button id="btn-toolbar-save" class="btn btn-primary" disabled>Save</button>
+        <div class="split-btn">
+          <button id="btn-toolbar-save" class="btn btn-primary split-btn-main" disabled>Save</button>
+          <button id="btn-toolbar-save-menu" class="btn btn-primary split-btn-arrow" disabled aria-label="Save options" aria-haspopup="menu"></button>
+        </div>
         <button id="btn-toolbar-settings" class="icon-btn" aria-label="Settings"></button>
       </div>
     </header>
@@ -66,6 +69,7 @@
     </main>
     <footer id="status-bar">
       <div class="status-left" id="status-selection">Ready</div>
+      <button type="button" id="status-warning" class="status-warning hidden"></button>
       <div class="status-right" id="status-counts"></div>
     </footer>
 

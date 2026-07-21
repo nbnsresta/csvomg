@@ -4,13 +4,16 @@
  * wiring into its own module and adds the Settings button alongside it.
  */
 
+import chevronDownIcon from '../icons/chevron-down.svg?raw';
 import slidersIcon from '../icons/sliders.svg?raw';
 import { createIcon } from '../utils/icons.ts';
+import { showContextMenu } from './context-menu.ts';
 
 export interface ToolbarOptions {
   onNew: VoidFunction;
   onOpen: VoidFunction;
   onSave: VoidFunction;
+  onSaveAs: VoidFunction;
   onSettings: VoidFunction;
 }
 
@@ -22,17 +25,24 @@ export function initToolbar(options: ToolbarOptions): ToolbarController {
   const btnNew = document.getElementById('btn-toolbar-new') as HTMLButtonElement;
   const btnOpen = document.getElementById('btn-toolbar-open') as HTMLButtonElement;
   const btnSave = document.getElementById('btn-toolbar-save') as HTMLButtonElement;
+  const btnSaveMenu = document.getElementById('btn-toolbar-save-menu') as HTMLButtonElement;
   const btnSettings = document.getElementById('btn-toolbar-settings') as HTMLButtonElement;
+  btnSaveMenu.appendChild(createIcon(chevronDownIcon));
   btnSettings.appendChild(createIcon(slidersIcon));
 
   btnNew.addEventListener('click', options.onNew);
   btnOpen.addEventListener('click', options.onOpen);
   btnSave.addEventListener('click', options.onSave);
+  btnSaveMenu.addEventListener('click', () => {
+    const rect = btnSaveMenu.getBoundingClientRect();
+    showContextMenu(rect.left, rect.bottom + 4, [{ label: 'Save As...', onSelect: options.onSaveAs }]);
+  });
   btnSettings.addEventListener('click', options.onSettings);
 
   return {
     setSaveEnabled: (enabled) => {
       btnSave.disabled = !enabled;
+      btnSaveMenu.disabled = !enabled;
     },
   };
 }

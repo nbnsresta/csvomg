@@ -2,6 +2,7 @@ import type {
   CellDiff,
   ColumnDiff,
   ColumnReorderDiff,
+  ColumnType,
   DataModel,
   Diff,
   HeaderRenameDiff,
@@ -14,12 +15,52 @@ export function createDataModel(
   rows: string[][],
   filename = 'Untitled',
   delimiter = ',',
+  columnTypes?: Record<string, ColumnType>,
 ): DataModel {
   return {
     headers: [...headers],
     rows: rows.map((row) => [...row]),
-    meta: { filename, delimiter },
+    meta: { filename, delimiter, ...(columnTypes ? { columnTypes } : {}) },
   };
+}
+
+/** Renames a key in a column-type profile map, dropping it if absent — used so a JSON-imported
+ * column's number/boolean type follows a header rename instead of silently reverting to text. */
+function renameTypeKey(
+  types: Record<string, ColumnType> | undefined,
+  from: string,
+  to: string,
+): Record<string, ColumnType> | undefined {
+  if (!types || !(from in types)) return types;
+  const { [from]: type, ...rest } = types;
+  return { ...rest, [to]: type };
+}
+
+/** Drops a key from a column-type profile map — used so a deleted JSON-imported column's type
+ * doesn't linger and get silently reused if a new column is later given the same header name. */
+function omitTypeKey(types: Record<string, ColumnType> | undefined, key: string): Record<string, ColumnType> | undefined {
+  if (!types || !(key in types)) return types;
+  const { [key]: _omitted, ...rest } = types;
+  return rest;
+}
+
+/** Permanently downgrades the given columns' profiled type to text (by dropping their
+ * columnTypes entry — the same default an unprofiled column already gets). Used once the user
+ * confirms an export-time type-mismatch resolution, so later saves (including auto-save) stop
+ * re-flagging it. Not undo/redo-tracked — same precedent as saveAs()'s direct filename mutation
+ * in main.ts: this is tab metadata about export representation, not a content edit the user
+ * expects to Ctrl+Z. */
+export function downgradeColumnsToText(data: DataModel, headers: string[]): DataModel {
+  if (!data.meta.columnTypes) return data;
+  const columnTypes = { ...data.meta.columnTypes };
+  let changed = false;
+  for (const h of headers) {
+    if (h in columnTypes) {
+      delete columnTypes[h];
+      changed = true;
+    }
+  }
+  return changed ? { ...data, meta: { ...data.meta, columnTypes } } : data;
 }
 
 /** True if any cell has non-whitespace content. Header text alone doesn't count. */
@@ -85,8 +126,9 @@ export function deleteColumn(data: DataModel, index: number): Mutation<ColumnDif
   const values = data.rows.map((r) => r[index]);
   const headers = [...data.headers.slice(0, index), ...data.headers.slice(index + 1)];
   const rows = data.rows.map((r) => [...r.slice(0, index), ...r.slice(index + 1)]);
+  const meta = { ...data.meta, columnTypes: omitTypeKey(data.meta.columnTypes, header) };
   return {
-    data: { ...data, headers, rows },
+    data: { ...data, headers, rows, meta },
     diff: { type: 'col-delete', index, header, values },
   };
 }
@@ -94,8 +136,9 @@ export function deleteColumn(data: DataModel, index: number): Mutation<ColumnDif
 export function renameColumn(data: DataModel, index: number, name: string): Mutation<HeaderRenameDiff> {
   const before = data.headers[index];
   const headers = data.headers.map((h, i) => (i === index ? name : h));
+  const meta = { ...data.meta, columnTypes: renameTypeKey(data.meta.columnTypes, before, name) };
   return {
-    data: { ...data, headers },
+    data: { ...data, headers, meta },
     diff: { type: 'header-rename', index, before, after: name },
   };
 }

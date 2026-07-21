@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { detectDelimiter, parseCSV, parseJSON, serializeCSV, serializeJSON } from '../src/core/parser.ts';
+import { detectDelimiter, findTypeMismatchedColumns, parseCSV, parseJSON, serializeCSV, serializeJSON } from '../src/core/parser.ts';
 
 describe('parseCSV', () => {
   it('parses a simple comma-delimited table', () => {
@@ -100,7 +100,41 @@ describe('parseJSON', () => {
   });
 
   it('returns empty table for an empty array', () => {
-    expect(parseJSON('[]')).toEqual({ headers: [], rows: [] });
+    expect(parseJSON('[]')).toEqual({ headers: [], rows: [], columnTypes: {} });
+  });
+
+  it('flattens nested objects into dot-delimited keys', () => {
+    const { headers, rows } = parseJSON('[{"id":1,"company":{"name":"Acme","hq":{"city":"NY"}}}]');
+    expect(headers).toEqual(['id', 'company.name', 'company.hq.city']);
+    expect(rows).toEqual([['1', 'Acme', 'NY']]);
+  });
+
+  it('flattens array values using their index as the path segment', () => {
+    const { headers, rows } = parseJSON('[{"images":[{"url":"a"},{"url":"b"}]}]');
+    expect(headers).toEqual(['images.0.url', 'images.1.url']);
+    expect(rows).toEqual([['a', 'b']]);
+  });
+
+  it('keeps empty objects/arrays as a stringified leaf, not flattened away', () => {
+    const { headers, rows } = parseJSON('[{"tags":[],"meta":{}}]');
+    expect(headers).toEqual(['tags', 'meta']);
+    expect(rows).toEqual([['[]', '{}']]);
+  });
+
+  it('profiles each column\'s type from the closest non-null value, not just the first row', () => {
+    const { columnTypes } = parseJSON(
+      '[{"price":null,"active":true},{"price":9.5,"active":null},{"price":"n/a","active":false}]',
+    );
+    expect(columnTypes).toEqual({ price: 'number', active: 'boolean' });
+  });
+
+  it('defaults a column to text when every value is a string, or every row is null', () => {
+    const { columnTypes } = parseJSON('[{"name":"a","note":null},{"name":"b","note":null}]');
+    expect(columnTypes).toEqual({ name: 'text' });
+  });
+
+  it('does not profile types for array-of-arrays input (no keys to type)', () => {
+    expect(parseJSON('[["a","b"],[1,2]]').columnTypes).toEqual({});
   });
 });
 
@@ -112,6 +146,98 @@ describe('serializeJSON', () => {
       ['3', '4'],
     ];
     const text = serializeJSON(headers, rows);
-    expect(parseJSON(text)).toEqual({ headers, rows });
+    expect(parseJSON(text)).toEqual({ headers, rows, columnTypes: { a: 'text', b: 'text' } });
+  });
+
+  it('exports profiled number/boolean columns as their real JSON type', () => {
+    const text = serializeJSON(['price', 'active', 'name'], [['9.5', 'true', 'Acme']], {
+      price: 'number',
+      active: 'boolean',
+      name: 'text',
+    });
+    expect(JSON.parse(text)).toEqual([{ price: 9.5, active: true, name: 'Acme' }]);
+  });
+
+  it('exports an empty cell as null for typed columns but "" for text columns', () => {
+    const text = serializeJSON(['price', 'name'], [['', '']], { price: 'number' });
+    expect(JSON.parse(text)).toEqual([{ price: null, name: '' }]);
+  });
+
+  it('falls back to the raw string when a typed cell no longer parses as its type', () => {
+    const text = serializeJSON(['price'], [['not-a-number']], { price: 'number' });
+    expect(JSON.parse(text)).toEqual([{ price: 'not-a-number' }]);
+  });
+
+  it('round-trips a nested object through parseJSON -> edit -> serializeJSON, rebuilding the nested shape', () => {
+    const original = '[{"company":{"name":"Acme","founded":1994}}]';
+    const { headers, rows, columnTypes } = parseJSON(original);
+    const text = serializeJSON(headers, rows, columnTypes);
+    expect(JSON.parse(text)).toEqual([{ company: { name: 'Acme', founded: 1994 } }]);
+  });
+
+  it('rebuilds a flattened array-of-objects field back into an array', () => {
+    const original = '[{"images":[{"url":"a"},{"url":"b"}]}]';
+    const { headers, rows, columnTypes } = parseJSON(original);
+    const text = serializeJSON(headers, rows, columnTypes);
+    expect(JSON.parse(text)).toEqual([{ images: [{ url: 'a' }, { url: 'b' }] }]);
+  });
+
+  it('rebuilds a 3-level-deep nested path', () => {
+    const original = '[{"company":{"hq":{"city":"NY"}}}]';
+    const { headers, rows, columnTypes } = parseJSON(original);
+    const text = serializeJSON(headers, rows, columnTypes);
+    expect(JSON.parse(text)).toEqual([{ company: { hq: { city: 'NY' } } }]);
+  });
+
+  it('never turns the record itself into an array, even if every header looks like an index', () => {
+    const text = serializeJSON(['0', '1'], [['a', 'b']]);
+    expect(JSON.parse(text)).toEqual([{ '0': 'a', '1': 'b' }]);
+  });
+
+  it('leaves an un-dotted header as a plain top-level key', () => {
+    const text = serializeJSON(['sku', 'price'], [['A1', '9.5']], { price: 'number' });
+    expect(JSON.parse(text)).toEqual([{ sku: 'A1', price: 9.5 }]);
+  });
+});
+
+describe('findTypeMismatchedColumns', () => {
+  it('flags a number column with a non-numeric cell', () => {
+    const headers = ['price'];
+    const rows = [['9.5'], ['not-a-number']];
+    expect(findTypeMismatchedColumns(headers, rows, { price: 'number' })).toEqual(['price']);
+  });
+
+  it('flags a boolean column with a value other than "true"/"false"', () => {
+    const headers = ['active'];
+    const rows = [['true'], ['maybe']];
+    expect(findTypeMismatchedColumns(headers, rows, { active: 'boolean' })).toEqual(['active']);
+  });
+
+  it('does not flag empty cells on a typed column', () => {
+    const headers = ['price'];
+    const rows = [['9.5'], ['']];
+    expect(findTypeMismatchedColumns(headers, rows, { price: 'number' })).toEqual([]);
+  });
+
+  it('never flags text columns, even with wildly varied content', () => {
+    const headers = ['name'];
+    const rows = [['Acme'], ['42'], ['true'], ['']];
+    expect(findTypeMismatchedColumns(headers, rows, { name: 'text' })).toEqual([]);
+  });
+
+  it('never flags a column with no columnTypes entry (implicit text)', () => {
+    const headers = ['note'];
+    const rows = [['n/a'], ['whatever']];
+    expect(findTypeMismatchedColumns(headers, rows, {})).toEqual([]);
+    expect(findTypeMismatchedColumns(headers, rows)).toEqual([]);
+  });
+
+  it('returns every mismatched column, not just the first', () => {
+    const headers = ['price', 'active', 'name'];
+    const rows = [['n/a', 'nope', 'Acme']];
+    expect(findTypeMismatchedColumns(headers, rows, { price: 'number', active: 'boolean', name: 'text' })).toEqual([
+      'price',
+      'active',
+    ]);
   });
 });

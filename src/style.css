@@ -223,6 +223,27 @@ footer#status-bar {
   color: var(--text-secondary);
 }
 
+/* Shown only while a JSON tab's auto-save is paused on a type mismatch — see updateSaveWarning()
+ * in main.ts. Clicking it re-runs the normal manual save, which re-checks and opens the same
+ * export-mismatch confirmation dialog. */
+.status-warning {
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 11px;
+  color: var(--warning);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  transition: text-decoration-color 0.15s ease;
+}
+
+.status-warning:hover {
+  text-decoration-color: var(--warning);
+}
+
 /* Empty State */
 #empty-state {
   display: flex;
@@ -456,6 +477,61 @@ footer#status-bar {
   margin-top: 4px;
 }
 
+/* Export-mismatch confirmation dialog (export-dialog.ts) — same native-<dialog> shell as
+ * .settings-dialog, sized a little wider to comfortably fit a column-name list. */
+.export-dialog {
+  width: 100%;
+  max-width: 420px;
+  margin: auto;
+  padding: 24px;
+  background-color: var(--surface-color);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+  color: var(--text-primary);
+}
+
+.export-dialog::backdrop {
+  background-color: var(--overlay-backdrop);
+  backdrop-filter: blur(4px);
+}
+
+.export-dialog h3 {
+  margin: 0 0 12px 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.export-dialog p {
+  margin: 0 0 12px 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.export-dialog-columns {
+  margin: 0 0 20px 0;
+  padding: 0;
+  list-style: none;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.export-dialog-columns li {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 4px 8px;
+  background-color: var(--surface-hover);
+  border-radius: 4px;
+  margin-bottom: 4px;
+}
+
+.export-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 /* Buttons */
 .btn {
   appearance: none;
@@ -493,6 +569,30 @@ footer#status-bar {
 }
 .btn-secondary:hover {
   background-color: var(--border-color);
+}
+
+/* Compound Save button — main action + a narrow arrow segment that opens a menu (Save As).
+ * Two separate <button>s visually merged into one via shared radius/border treatment, not a
+ * single button with a nested dropdown — keeps each half's own click handler simple. */
+.split-btn {
+  display: inline-flex;
+}
+
+.split-btn-main {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.split-btn-arrow {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.25);
+  padding: 6px 8px;
+}
+
+.split-btn-arrow svg {
+  width: 14px;
+  height: 14px;
 }
 
 /* Generic icon-only button — toolbar Settings, and anywhere else an icon button needs the same
