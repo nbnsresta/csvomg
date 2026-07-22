@@ -62,7 +62,13 @@ export interface ColumnReorderDiff {
   to: number;
 }
 
-export type Diff = CellDiff | RowDiff | ColumnDiff | HeaderRenameDiff | ColumnReorderDiff;
+export interface RowReorderDiff {
+  type: 'row-reorder';
+  from: number;
+  to: number;
+}
+
+export type Diff = CellDiff | RowDiff | ColumnDiff | HeaderRenameDiff | ColumnReorderDiff | RowReorderDiff;
 
 export interface Mutation<D extends Diff = Diff> {
   data: DataModel;

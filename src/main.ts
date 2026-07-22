@@ -10,10 +10,12 @@ import {
   hasContent,
   insertColumn,
   insertRow,
+  moveItem,
   nextColumnLetter,
   normalizeTrailingBuffer,
   renameColumn,
   reorderColumn,
+  reorderRow,
   setCell,
   trimTrailingBlank,
 } from './core/data.ts';
@@ -164,6 +166,8 @@ const grid = new Grid(gridContainer, {
   onToggleSort: handleToggleSort,
   onColumnOptions: handleColumnOptions,
   onColumnResize: handleColumnResize,
+  onColumnReorder: handleColumnReorder,
+  onRowReorder: handleRowReorder,
   onBulkEdit: handleBulkEdit,
   onSelectionChange: updateSelectionStatus,
   onContextMenu: handleContextMenu,
@@ -871,9 +875,15 @@ function commitMutation(data: DataModel, diff: Diff | Diff[]): void {
   const diffs = Array.isArray(diff) ? diff : [diff];
   // A column structural edit can leave `sort.sortBy` pointing at the wrong column — silently
   // sorting by the wrong column would be worse than sort just turning off, so it's cleared rather
-  // than remapped. Checked against the original diffs only, before normalizeTrailingBuffer's own
-  // buffer-maintenance column diffs are appended below — those must NOT clear an active sort.
-  if (tab.sort && diffs.some((d) => d.type === 'col-insert' || d.type === 'col-delete' || d.type === 'col-reorder')) {
+  // than remapped. A manual row-reorder gets the same treatment for a different reason:
+  // computeRowOrder() re-sorts live on every render, so leaving the sort active would make the
+  // drag's result invisible (the view snaps right back). Checked against the original diffs only,
+  // before normalizeTrailingBuffer's own buffer-maintenance diffs are appended below — those must
+  // NOT clear an active sort.
+  if (
+    tab.sort &&
+    diffs.some((d) => d.type === 'col-insert' || d.type === 'col-delete' || d.type === 'col-reorder' || d.type === 'row-reorder')
+  ) {
     tab.sort = null;
   }
   const normalized = normalizeTrailingBuffer(data);
@@ -931,6 +941,63 @@ function handleInsertRow(row: number): void {
   const realRow = row < order.length ? order[row] : tab.data.rows.length;
   const mutation = insertRow(tab.data, realRow);
   commitMutation(mutation.data, mutation.diff);
+}
+
+/** Drag-to-reorder a column, settled at mouseup (grid.ts fires this once, not per-pixel, and only
+ * when the drop actually changed anything). Columns have no separate "view" order the way rows do
+ * under an active sort, so from/to are already real indices — this is the same operation the
+ * header options menu's "Move left"/"Move right" already trigger, just with arbitrary distance. */
+function handleColumnReorder(from: number, to: number): void {
+  const tab = getActiveTab();
+  if (!tab) return;
+  const mutation = reorderColumn(tab.data, from, to);
+  commitMutation(mutation.data, mutation.diff);
+}
+
+/**
+ * Decomposes "rearrange the real rows array into targetOrder" into a sequence of simple
+ * reorderRow-style (from, to) moves, each valid against the array as it stands after the previous
+ * move — standard selection-sort-by-position. Used only when a sort is active (see
+ * handleRowReorder): a drag's target position is expressed in *display* space, but a single
+ * moveItem can't in general turn the real array directly into an arbitrary permutation in one
+ * step, since the sort had already scrambled the real order relative to the display one.
+ */
+function planRowMoves(targetOrder: number[]): Array<{ from: number; to: number }> {
+  const working = targetOrder.map((_, i) => i);
+  const moves: Array<{ from: number; to: number }> = [];
+  for (let i = 0; i < targetOrder.length; i++) {
+    const j = working.indexOf(targetOrder[i], i);
+    if (j !== i) {
+      moves.push({ from: j, to: i });
+      working.splice(i, 0, working.splice(j, 1)[0]);
+    }
+  }
+  return moves;
+}
+
+/** Drag-to-reorder a row, settled at mouseup. Grid only ever sees the sorted *display* order (see
+ * renderTabIntoGrid) so from/to are display indices. Unsorted, that's already identity — same
+ * simple case as handleColumnReorder. Sorted, dragging still clears the sort (below, via
+ * commitMutation's existing structural-edit check) so the manual order actually sticks instead of
+ * the view snapping right back — but realizing "move this row to this display position, then drop
+ * the sort" takes more than one moveItem call in general, hence planRowMoves. */
+function handleRowReorder(from: number, to: number): void {
+  const tab = getActiveTab();
+  if (!tab) return;
+  if (!tab.sort) {
+    const mutation = reorderRow(tab.data, from, to);
+    commitMutation(mutation.data, mutation.diff);
+    return;
+  }
+  const newOrder = moveItem(computeRowOrder(tab), from, to);
+  let data = tab.data;
+  const diffs: Diff[] = [];
+  for (const move of planRowMoves(newOrder)) {
+    const mutation = reorderRow(data, move.from, move.to);
+    data = mutation.data;
+    diffs.push(mutation.diff);
+  }
+  commitMutation(data, diffs);
 }
 
 function handleCellEdit(row: number, col: number, value: string): void {

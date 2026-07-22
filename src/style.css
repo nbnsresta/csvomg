@@ -725,6 +725,39 @@ footer#status-bar {
   inset: 0;
 }
 
+/* Forced on every descendant (not just the dragged cell) for the duration of a header/gutter
+ * drag — !important is required since plenty of descendants (buttons, the resize-zone, data
+ * cells) declare their own more-specific `cursor` that would otherwise win over whatever the
+ * pointer happens to be hovering mid-drag. */
+.grid-root.dragging-reorder,
+.grid-root.dragging-reorder * {
+  cursor: grabbing !important;
+}
+
+/* Follows the cursor during a header/gutter drag, naming whatever's being dragged (grid.ts's
+ * showDragGhost/moveDragGhost) — pointer-events: none so it never interferes with the
+ * elementFromPoint() hit-testing that drives the drop-indicator's boundary detection.
+ * left/top track the cursor's own coordinates directly (set in grid.ts); centering under the
+ * cursor via transform, rather than offsetting the coordinates themselves, keeps it centered
+ * regardless of the label's own (variable, text-dependent) width. Partial opacity + sitting right
+ * at the cursor's position (not off to one side) is what reads as "behind the cursor" — the real
+ * OS cursor icon always paints above page content, so it naturally stays on top. */
+.grid-drag-ghost {
+  position: fixed;
+  transform: translate(-50%, -50%);
+  z-index: var(--z-floating);
+  pointer-events: none;
+  opacity: 0.7;
+  padding: 4px 10px;
+  border-radius: 4px;
+  background-color: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
 .grid-scroll {
   position: relative;
   width: 100%;
@@ -779,6 +812,12 @@ footer#status-bar {
   overflow: hidden;
   border-right: 1px solid var(--border-color);
   box-sizing: border-box;
+  cursor: grab;
+}
+
+.grid-header-cell.dragging {
+  opacity: 0.4;
+  cursor: grabbing;
 }
 
 .grid-header-label {
@@ -871,10 +910,16 @@ footer#status-bar {
   font-family: var(--font-mono);
   color: var(--text-muted);
   box-sizing: border-box;
+  cursor: grab;
 }
 
 .grid-gutter-cell:hover {
     background-color: var(--surface-hover);
+}
+
+.grid-gutter-cell.dragging {
+  opacity: 0.4;
+  cursor: grabbing;
 }
 
 /*
@@ -971,6 +1016,29 @@ footer#status-bar {
   color: var(--surface-color);
   border-radius: 25%;
   transition: opacity 100ms;
+}
+
+/* Drop-position indicators for drag-to-reorder (grid.ts's colDrag/rowDrag) — same thin-accent-bar
+ * language as .grid-col-resize-zone:hover, but always visible (not hover-gated) for the duration
+ * of the drag, tracking whichever boundary the cursor currently favors. */
+.grid-col-drop-indicator {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  width: 2px;
+  background-color: var(--accent);
+  z-index: 2;
+  pointer-events: none;
+}
+
+.grid-row-drop-indicator {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background-color: var(--accent);
+  z-index: 2;
+  pointer-events: none;
 }
 
 .grid-insert-row-zone:hover svg {

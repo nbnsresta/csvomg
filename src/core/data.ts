@@ -8,6 +8,7 @@ import type {
   HeaderRenameDiff,
   Mutation,
   RowDiff,
+  RowReorderDiff,
 } from '../types/index.ts';
 
 export function createDataModel(
@@ -68,7 +69,7 @@ export function hasContent(data: DataModel): boolean {
   return data.rows.some((row) => row.some((cell) => cell.trim() !== ''));
 }
 
-function moveItem<T>(arr: T[], from: number, to: number): T[] {
+export function moveItem<T>(arr: T[], from: number, to: number): T[] {
   const copy = [...arr];
   const [item] = copy.splice(from, 1);
   copy.splice(to, 0, item);
@@ -149,6 +150,14 @@ export function reorderColumn(data: DataModel, from: number, to: number): Mutati
   return {
     data: { ...data, headers, rows },
     diff: { type: 'col-reorder', from, to },
+  };
+}
+
+export function reorderRow(data: DataModel, from: number, to: number): Mutation<RowReorderDiff> {
+  const rows = moveItem(data.rows, from, to);
+  return {
+    data: { ...data, rows },
+    diff: { type: 'row-reorder', from, to },
   };
 }
 
@@ -281,6 +290,8 @@ export function applyDiff(data: DataModel, diff: Diff): DataModel {
       return renameColumn(data, diff.index, diff.after).data;
     case 'col-reorder':
       return reorderColumn(data, diff.from, diff.to).data;
+    case 'row-reorder':
+      return reorderRow(data, diff.from, diff.to).data;
   }
 }
 
@@ -301,6 +312,8 @@ export function invertDiff(diff: Diff): Diff {
       return { type: 'header-rename', index: diff.index, before: diff.after, after: diff.before };
     case 'col-reorder':
       return { type: 'col-reorder', from: diff.to, to: diff.from };
+    case 'row-reorder':
+      return { type: 'row-reorder', from: diff.to, to: diff.from };
   }
 }
 

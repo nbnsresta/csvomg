@@ -16,6 +16,7 @@ import {
   normalizeTrailingBuffer,
   renameColumn,
   reorderColumn,
+  reorderRow,
   setCell,
   trimTrailingBlank,
   undoDiff,
@@ -162,6 +163,28 @@ describe('reorderColumn', () => {
   });
 });
 
+describe('reorderRow', () => {
+  it('moves a row and its inverse restores original order, leaving headers untouched', () => {
+    const original = createDataModel(
+      ['a', 'b'],
+      [
+        ['1', '2'],
+        ['3', '4'],
+        ['5', '6'],
+      ],
+    );
+    const { data, diff } = reorderRow(original, 0, 2);
+    expect(data.headers).toEqual(['a', 'b']);
+    expect(data.rows).toEqual([
+      ['3', '4'],
+      ['5', '6'],
+      ['1', '2'],
+    ]);
+    const restored = undoDiff(data, diff);
+    expect(restored).toEqual(original);
+  });
+});
+
 describe('applyDiff / invertDiff', () => {
   it('applying a diff then its inverse returns to the original state for every diff type', () => {
     const original = sample();
@@ -172,6 +195,8 @@ describe('applyDiff / invertDiff', () => {
       insertColumn(original, 0, 'new'),
       deleteColumn(original, 1),
       renameColumn(original, 0, 'renamed'),
+      reorderColumn(original, 0, 1),
+      reorderRow(original, 0, 1),
     ];
     for (const { data, diff } of mutations) {
       const roundTripped = applyDiff(data, invertDiff(diff));

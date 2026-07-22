@@ -18,6 +18,10 @@ const INSERT_ZONE_SIZE = 4;
 // Small enough to be a deliberate choice, large enough to keep the header's sort + options
 // buttons plus a sliver of label visible.
 const MIN_COL_WIDTH = 60;
+// Pixels of mouse movement before a header/gutter mousedown becomes a reorder drag rather than a
+// plain click — neither cell type has any click behavior of its own to protect, but this still
+// avoids flashing the drag indicator on an accidental sub-pixel jiggle.
+const DRAG_THRESHOLD = 4;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -51,6 +55,10 @@ export interface GridOptions {
   onColumnOptions: (col: number, x: number, y: number) => void;
   /** Drag-resize settled at mouseup — fired once, not per-pixel. */
   onColumnResize: (col: number, width: number) => void;
+  /** Drag-to-reorder settled at mouseup — fired once, not per-pixel, and not at all if dropped
+   * back at its starting position. */
+  onColumnReorder: (from: number, to: number) => void;
+  onRowReorder: (from: number, to: number) => void;
   /**
    * Fired once for a multi-cell operation (paste, Delete/Backspace-clear) instead of calling
    * onCellEdit per cell — lets the caller record it as a single undo step rather than one per
@@ -100,6 +108,17 @@ export class Grid {
    * happens on every mousemove during a drag; a freshly recreated node under a fast-moving cursor
    * doesn't reliably keep matching :hover, so the highlight needs to be state-driven instead. */
   private resizingCol: number | null = null;
+  /** Render-only state for an in-progress drag-to-reorder — the actual header/gutter/cell order
+   * is never touched mid-drag, only this indicator's position, until mouseup commits the real
+   * mutation via onColumnReorder/onRowReorder. */
+  private colDrag: { from: number; boundary: number } | null = null;
+  private rowDrag: { from: number; boundary: number } | null = null;
+  /** Follows the cursor during a header/gutter drag — a small floating label naming whatever's
+   * being dragged (e.g. a column's header text, or "Row 3"), since otherwise the only feedback is
+   * the dimmed source cell, which easily scrolls out of view or is just far from the cursor by the
+   * time you're near the drop target. Appended to `document.body` (not `this.root`) since it needs
+   * to render above absolutely everything, unclipped by the grid's own scroll container. */
+  private dragGhost: HTMLElement | null = null;
 
   constructor(container: HTMLElement, options: GridOptions) {
     this.container = container;
@@ -143,9 +162,11 @@ export class Grid {
     // insert-zone divs are all rebuilt on every render, so a single listener per stable parent
     // avoids re-attaching per render.
     this.headerCellsEl.addEventListener('mousedown', this.handleColResizeMouseDown);
+    this.headerCellsEl.addEventListener('mousedown', this.handleHeaderDragMouseDown);
     this.headerCellsEl.addEventListener('click', this.handleSortBtnClick);
     this.headerCellsEl.addEventListener('click', this.handleOptionsBtnClick);
     this.gutterWrap.addEventListener('click', this.handleInsertRowClick);
+    this.gutterWrap.addEventListener('mousedown', this.handleGutterDragMouseDown);
     // Not a native 'dblclick' listener: handleMouseDown does a synchronous full re-render on
     // every click (replacing the cell's DOM node), and Chromium's native double-click detection
     // requires the *same* node across both clicks — so dblclick silently never fires here.
@@ -247,9 +268,11 @@ export class Grid {
     this.scrollEl.removeEventListener('mousedown', this.handleMouseDown);
     this.scrollEl.removeEventListener('contextmenu', this.handleContextMenu);
     this.headerCellsEl.removeEventListener('mousedown', this.handleColResizeMouseDown);
+    this.headerCellsEl.removeEventListener('mousedown', this.handleHeaderDragMouseDown);
     this.headerCellsEl.removeEventListener('click', this.handleSortBtnClick);
     this.headerCellsEl.removeEventListener('click', this.handleOptionsBtnClick);
     this.gutterWrap.removeEventListener('click', this.handleInsertRowClick);
+    this.gutterWrap.removeEventListener('mousedown', this.handleGutterDragMouseDown);
     document.removeEventListener('copy', this.handleCopy);
     document.removeEventListener('cut', this.handleCut);
     document.removeEventListener('paste', this.handlePaste);
@@ -343,6 +366,7 @@ export class Grid {
     for (let c = firstCol; c <= lastCol; c++) {
       const cell = document.createElement('div');
       cell.className = 'grid-header-cell';
+      if (this.colDrag && c === this.colDrag.from) cell.classList.add('dragging');
       cell.style.left = `${GUTTER_WIDTH + this.colOffsets[c]}px`;
       cell.style.width = `${this.colOffsets[c + 1] - this.colOffsets[c]}px`;
       cell.dataset.col = String(c);
@@ -394,6 +418,13 @@ export class Grid {
       zone.dataset.resizeCol = String(i - 1);
       this.headerCellsEl.appendChild(zone);
     }
+
+    if (this.colDrag) {
+      const indicator = document.createElement('div');
+      indicator.className = 'grid-col-drop-indicator';
+      indicator.style.left = `${GUTTER_WIDTH + this.colOffsets[this.colDrag.boundary]}px`;
+      this.headerCellsEl.appendChild(indicator);
+    }
   }
 
   private renderGutter(firstRow: number, lastRow: number): void {
@@ -401,6 +432,7 @@ export class Grid {
     for (let r = firstRow; r <= lastRow; r++) {
       const cell = document.createElement('div');
       cell.className = 'grid-gutter-cell';
+      if (this.rowDrag && r === this.rowDrag.from) cell.classList.add('dragging');
       cell.style.top = `${r * ROW_HEIGHT}px`;
       cell.dataset.row = String(r);
       cell.textContent = String(r + 1);
@@ -419,6 +451,13 @@ export class Grid {
       zone.dataset.insertRow = String(r);
       zone.appendChild(createIcon(plusIcon));
       this.gutterWrap.appendChild(zone);
+    }
+
+    if (this.rowDrag) {
+      const indicator = document.createElement('div');
+      indicator.className = 'grid-row-drop-indicator';
+      indicator.style.top = `${this.rowDrag.boundary * ROW_HEIGHT}px`;
+      this.gutterWrap.appendChild(indicator);
     }
   }
 
@@ -678,11 +717,149 @@ export class Grid {
     document.addEventListener('mouseup', onUp);
   };
 
+  private showDragGhost(text: string, x: number, y: number): void {
+    const el = document.createElement('div');
+    el.className = 'grid-drag-ghost';
+    el.textContent = text;
+    document.body.appendChild(el);
+    this.dragGhost = el;
+    this.moveDragGhost(x, y);
+  }
+
+  private moveDragGhost(x: number, y: number): void {
+    if (!this.dragGhost) return;
+    // Centered on the cursor's own coordinates (the CSS transform: translate(-50%, -50%) does the
+    // centering) so it sits right behind the real cursor icon, not off to one side.
+    this.dragGhost.style.left = `${x}px`;
+    this.dragGhost.style.top = `${y}px`;
+  }
+
+  private hideDragGhost(): void {
+    this.dragGhost?.remove();
+    this.dragGhost = null;
+  }
+
+  /** Drag-to-reorder a column, started from anywhere on the header cell except its sort/options
+   * buttons — the resize-zone is a sibling, not a descendant, so it's already excluded by the
+   * `.closest('.grid-header-cell')` check below, same as it already is for a plain header click.
+   * Deliberately not a live-reordering drag like resize: only the drop-indicator bar tracks the
+   * candidate boundary during the drag, and the real column order is untouched until mouseup
+   * commits it via onColumnReorder. */
+  private handleHeaderDragMouseDown = (event: MouseEvent): void => {
+    if (event.button !== 0) return;
+    const target = event.target as HTMLElement;
+    if (target.closest('.grid-header-sort-btn, .grid-header-options-btn')) return;
+    const cell = target.closest<HTMLElement>('.grid-header-cell');
+    if (!cell) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const from = Number(cell.dataset.col);
+    const startX = event.clientX;
+    const startY = event.clientY;
+    let dragging = false;
+
+    const onMove = (moveEvent: MouseEvent): void => {
+      if (!dragging) {
+        if (Math.abs(moveEvent.clientX - startX) < DRAG_THRESHOLD && Math.abs(moveEvent.clientY - startY) < DRAG_THRESHOLD) {
+          return;
+        }
+        dragging = true;
+        this.colDrag = { from, boundary: from };
+        // A class on the grid root + a `*` CSS rule (not document.body.style.cursor, which only
+        // sets body's own value — a descendant with its own `cursor` rule, e.g. any other header
+        // cell, a button, the resize-zone, always wins over an ancestor's for its own box) is what
+        // actually forces "grabbing" regardless of which element the pointer happens to be over.
+        this.root.classList.add('dragging-reorder');
+        this.showDragGhost(this.data.headers[from] || `Column ${from + 1}`, moveEvent.clientX, moveEvent.clientY);
+        this.renderNow();
+      }
+      this.moveDragGhost(moveEvent.clientX, moveEvent.clientY);
+      const el = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY);
+      const headerEl = el?.closest<HTMLElement>('.grid-header-cell');
+      if (!headerEl) return;
+      const col = Number(headerEl.dataset.col);
+      const rect = headerEl.getBoundingClientRect();
+      const boundary = moveEvent.clientX < rect.left + rect.width / 2 ? col : col + 1;
+      if (this.colDrag && boundary !== this.colDrag.boundary) {
+        this.colDrag = { from, boundary };
+        this.renderNow();
+      }
+    };
+    const onUp = (): void => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      this.root.classList.remove('dragging-reorder');
+      this.hideDragGhost();
+      const drag = this.colDrag;
+      this.colDrag = null;
+      this.renderNow();
+      if (!drag) return;
+      const to = drag.boundary > drag.from ? drag.boundary - 1 : drag.boundary;
+      if (to !== drag.from) this.options.onColumnReorder(drag.from, to);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
+
   private handleInsertRowClick = (event: MouseEvent): void => {
     const zone = (event.target as HTMLElement).closest<HTMLElement>('.grid-insert-row-zone');
     if (!zone) return;
     event.stopPropagation();
     this.options.onInsertRow(Number(zone.dataset.insertRow));
+  };
+
+  /** Row counterpart of handleHeaderDragMouseDown — the insert-row-"+" zone is a sibling of
+   * gutter cells, not a descendant, so it's already excluded the same way. */
+  private handleGutterDragMouseDown = (event: MouseEvent): void => {
+    if (event.button !== 0) return;
+    const cell = (event.target as HTMLElement).closest<HTMLElement>('.grid-gutter-cell');
+    if (!cell) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const from = Number(cell.dataset.row);
+    const startX = event.clientX;
+    const startY = event.clientY;
+    let dragging = false;
+
+    const onMove = (moveEvent: MouseEvent): void => {
+      if (!dragging) {
+        if (Math.abs(moveEvent.clientX - startX) < DRAG_THRESHOLD && Math.abs(moveEvent.clientY - startY) < DRAG_THRESHOLD) {
+          return;
+        }
+        dragging = true;
+        this.rowDrag = { from, boundary: from };
+        this.root.classList.add('dragging-reorder');
+        this.showDragGhost(`Row ${from + 1}`, moveEvent.clientX, moveEvent.clientY);
+        this.renderNow();
+      }
+      this.moveDragGhost(moveEvent.clientX, moveEvent.clientY);
+      const el = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY);
+      const gutterEl = el?.closest<HTMLElement>('.grid-gutter-cell');
+      if (!gutterEl) return;
+      const row = Number(gutterEl.dataset.row);
+      const rect = gutterEl.getBoundingClientRect();
+      const boundary = moveEvent.clientY < rect.top + rect.height / 2 ? row : row + 1;
+      if (this.rowDrag && boundary !== this.rowDrag.boundary) {
+        this.rowDrag = { from, boundary };
+        this.renderNow();
+      }
+    };
+    const onUp = (): void => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      this.root.classList.remove('dragging-reorder');
+      this.hideDragGhost();
+      const drag = this.rowDrag;
+      this.rowDrag = null;
+      this.renderNow();
+      if (!drag) return;
+      const to = drag.boundary > drag.from ? drag.boundary - 1 : drag.boundary;
+      if (to !== drag.from) this.options.onRowReorder(drag.from, to);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
   };
 
   private handleContextMenu = (event: MouseEvent): void => {
