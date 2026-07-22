@@ -11,18 +11,14 @@
  * takes effect right away.
  */
 
-import { CANDIDATE_DELIMITERS } from '../core/parser.ts';
 import type { Settings } from '../io/settings.ts';
-
-const DELIMITER_LABELS: Record<string, string> = { ',': 'Comma', '\t': 'Tab', ';': 'Semicolon', '|': 'Pipe' };
 
 let dialog: HTMLDialogElement | null = null;
 let themeDarkInput: HTMLInputElement;
 let themeLightInput: HTMLInputElement;
 let autoSaveInput: HTMLInputElement;
-let delimiterSelect: HTMLSelectElement;
 
-let current: Settings = { theme: 'dark', autoSave: false, defaultDelimiter: ',' };
+let current: Settings = { theme: 'dark', autoSave: false };
 let onChangeCallback: (next: Settings) => void = () => {};
 
 function emitChange(patch: Partial<Settings>): void {
@@ -78,22 +74,6 @@ function buildDialog(): HTMLDialogElement {
   autoSaveGroup.appendChild(autoSaveLabel);
   el.appendChild(autoSaveGroup);
 
-  const delimGroup = document.createElement('div');
-  delimGroup.className = 'settings-group';
-  const delimLabel = document.createElement('label');
-  delimLabel.textContent = 'Default delimiter for new files';
-  delimiterSelect = document.createElement('select');
-  for (const d of CANDIDATE_DELIMITERS) {
-    const opt = document.createElement('option');
-    opt.value = d;
-    opt.textContent = DELIMITER_LABELS[d] ?? d;
-    delimiterSelect.appendChild(opt);
-  }
-  delimiterSelect.addEventListener('change', () => emitChange({ defaultDelimiter: delimiterSelect.value }));
-  delimLabel.appendChild(delimiterSelect);
-  delimGroup.appendChild(delimLabel);
-  el.appendChild(delimGroup);
-
   const doneBtn = document.createElement('button');
   doneBtn.type = 'button';
   doneBtn.className = 'btn btn-primary settings-done';
@@ -121,6 +101,5 @@ export function showSettingsDialog(settings: Settings, onChange: (next: Settings
   themeDarkInput.checked = settings.theme === 'dark';
   themeLightInput.checked = settings.theme === 'light';
   autoSaveInput.checked = settings.autoSave;
-  delimiterSelect.value = settings.defaultDelimiter;
   if (!dialog.open) dialog.showModal();
 }

@@ -9,12 +9,9 @@
 export interface Settings {
   theme: 'dark' | 'light';
   autoSave: boolean;
-  /** One of parser.ts's CANDIDATE_DELIMITERS. Only affects newFile()'s default — an already-open
-   * file keeps using its own detected/stored delimiter regardless of this setting. */
-  defaultDelimiter: string;
 }
 
-export const DEFAULT_SETTINGS: Settings = { theme: 'dark', autoSave: false, defaultDelimiter: ',' };
+export const DEFAULT_SETTINGS: Settings = { theme: 'dark', autoSave: false };
 
 const STORAGE_KEY = 'csvomg-settings';
 
@@ -31,7 +28,6 @@ export function loadSettings(): Settings {
     return {
       theme: isValidTheme(parsed.theme) ? parsed.theme : DEFAULT_SETTINGS.theme,
       autoSave: typeof parsed.autoSave === 'boolean' ? parsed.autoSave : DEFAULT_SETTINGS.autoSave,
-      defaultDelimiter: typeof parsed.defaultDelimiter === 'string' ? parsed.defaultDelimiter : DEFAULT_SETTINGS.defaultDelimiter,
     };
   } catch {
     return DEFAULT_SETTINGS;

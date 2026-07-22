@@ -532,6 +532,31 @@ footer#status-bar {
   gap: 8px;
 }
 
+/* Save As dialog (save-as-dialog.ts) — same native-<dialog> shell as .settings-dialog/.export-dialog;
+ * the "File type"/"Delimiter" groups and button row reuse .settings-group/.export-dialog-actions. */
+.save-as-dialog {
+  width: 100%;
+  max-width: 380px;
+  margin: auto;
+  padding: 24px;
+  background-color: var(--surface-color);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+  color: var(--text-primary);
+}
+
+.save-as-dialog::backdrop {
+  background-color: var(--overlay-backdrop);
+  backdrop-filter: blur(4px);
+}
+
+.save-as-dialog h3 {
+  margin: 0 0 16px 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
 /* Buttons */
 .btn {
   appearance: none;

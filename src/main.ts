@@ -35,6 +35,7 @@ import { showExportMismatchDialog } from './ui/export-dialog.ts';
 import { createFindBar } from './ui/find-bar.ts';
 import { Grid, type CellEdit, type ContextMenuTarget } from './ui/grid.ts';
 import { showReconnectDialog } from './ui/reconnect-dialog.ts';
+import { showSaveAsDialog, type SaveAsChoice } from './ui/save-as-dialog.ts';
 import { showSettingsDialog } from './ui/settings-dialog.ts';
 import { initToolbar } from './ui/toolbar.ts';
 import { loadSettings, saveSettings, type Settings } from './io/settings.ts';
@@ -379,6 +380,21 @@ function detectFileType(filename: string): FileType {
   return filename.toLowerCase().endsWith('.json') ? 'json' : 'csv';
 }
 
+function extensionFor(choice: SaveAsChoice): string {
+  if (choice.fileType === 'json') return '.json';
+  return choice.delimiter === '\t' ? '.tsv' : '.csv';
+}
+
+/** Swaps a filename's extension to match a Save-As choice, stripping any existing supported
+ * extension first — used so the native save picker's suggested name reflects the format the user
+ * actually picked, rather than the format the file happened to have on disk before. */
+function suggestFilename(filename: string, choice: SaveAsChoice): string {
+  const lower = filename.toLowerCase();
+  const match = SUPPORTED_EXTENSIONS.find((ext) => lower.endsWith(ext));
+  const base = match ? filename.slice(0, filename.length - match.length) : filename;
+  return base + extensionFor(choice);
+}
+
 function parseOpenedFile(opened: OpenedFile): { data: DataModel; type: FileType } {
   const type = detectFileType(opened.name);
   if (type === 'json') {
@@ -403,12 +419,15 @@ async function reconnectFileHandle(handle: FileSystemFileHandle): Promise<{ data
 }
 
 /** Never mutates tab.data — only the bytes written out are trimmed, so the live grid keeps its
- * running buffer of blank trailing rows/columns untouched. */
-function serializeTab(tab: DocTab): string {
+ * running buffer of blank trailing rows/columns untouched. `override` lets performSaveAs()
+ * serialize in a different format/delimiter than the tab's own current one (format conversion). */
+function serializeTab(tab: DocTab, override?: SaveAsChoice): string {
   const data = trimTrailingBlank(tab.data);
-  return tab.fileType === 'json'
+  const fileType = override?.fileType ?? tab.fileType;
+  const delimiter = override?.delimiter ?? data.meta.delimiter;
+  return fileType === 'json'
     ? serializeJSON(data.headers, data.rows, data.meta.columnTypes)
-    : serializeCSV(data.headers, data.rows, data.meta.delimiter);
+    : serializeCSV(data.headers, data.rows, delimiter);
 }
 
 function showGrid(): void {
@@ -778,7 +797,7 @@ function newFile(): void {
   if (!canOpenNewTab()) return;
   const tab: DocTab = {
     id: crypto.randomUUID(),
-    data: normalizeTrailingBuffer(createDataModel([], [], nextUntitledName(), settings.defaultDelimiter)).data,
+    data: normalizeTrailingBuffer(createDataModel([], [], nextUntitledName(), ',')).data,
     handle: null,
     fileType: 'csv',
     dirty: true,
@@ -1106,13 +1125,16 @@ async function openFileDialog(): Promise<void> {
   loadFile(opened[0]);
 }
 
-/** Gates an interactive JSON save behind a confirmation when a column no longer matches its
- * profiled type — see findTypeMismatchedColumns. `proceed` runs immediately for CSV tabs and for
- * a JSON tab with no mismatches (the common, "straightforward" case); otherwise it only runs
- * after the user confirms showExportMismatchDialog(), which also permanently downgrades the
- * affected columns to text so later saves (including auto-save) don't re-flag them. */
-function withMismatchCheck(tab: DocTab, proceed: () => void): void {
-  if (tab.fileType !== 'json') return proceed();
+/** Gates an interactive save behind a confirmation when a column no longer matches its profiled
+ * type — see findTypeMismatchedColumns. Keyed by the *target* format being written, not the tab's
+ * current one: a mismatch only matters when writing JSON (CSV ignores columnTypes entirely), so
+ * converting a JSON tab with mismatches to CSV via Save As never needs to prompt. `proceed` runs
+ * immediately for a non-JSON target and for a JSON target with no mismatches (the common,
+ * "straightforward" case); otherwise it only runs after the user confirms
+ * showExportMismatchDialog(), which also permanently downgrades the affected columns to text so
+ * later saves (including auto-save) don't re-flag them. */
+function withMismatchCheck(tab: DocTab, targetType: FileType, proceed: () => void): void {
+  if (targetType !== 'json') return proceed();
   const mismatched = findTypeMismatchedColumns(tab.data.headers, tab.data.rows, tab.data.meta.columnTypes);
   if (mismatched.length === 0) return proceed();
   showExportMismatchDialog(mismatched, () => {
@@ -1126,7 +1148,7 @@ async function save(): Promise<void> {
   grid.commitPendingEdit();
   const tab = getActiveTab();
   if (!tab) return;
-  withMismatchCheck(tab, () => void performSave(tab));
+  withMismatchCheck(tab, tab.fileType, () => void performSave(tab));
 }
 
 async function performSave(tab: DocTab): Promise<void> {
@@ -1141,28 +1163,42 @@ async function performSave(tab: DocTab): Promise<void> {
       // Permission may have been revoked; fall through to Save As.
     }
   }
-  await performSaveAs(tab);
+  // Implicit first save of a handle-less tab (not an explicit Save-As action) — keeps the tab's
+  // current format/delimiter rather than opening the format-picker dialog, same as Ctrl+S always
+  // being the fast/silent path.
+  await performSaveAs(tab, { fileType: tab.fileType, delimiter: tab.data.meta.delimiter });
 }
 
+/** Opens the Save As format-picker dialog (src/ui/save-as-dialog.ts) — the single entry point for
+ * both the split-button's "Save As..." menu item and Ctrl+Shift+S. Unlike save()/performSave(),
+ * the chosen format may differ from the tab's current one (CSV<->JSON conversion is just picking a
+ * different serializer, see core/parser.ts's flatten/unflatten), so the mismatch check runs
+ * against the *chosen* target, not tab.fileType. */
 async function saveAs(): Promise<void> {
   grid.commitPendingEdit();
   const tab = getActiveTab();
   if (!tab) return;
-  withMismatchCheck(tab, () => void performSaveAs(tab));
+  showSaveAsDialog({ fileType: tab.fileType, delimiter: tab.data.meta.delimiter }, (choice) => {
+    withMismatchCheck(tab, choice.fileType, () => void performSaveAs(tab, choice));
+  });
 }
 
-async function performSaveAs(tab: DocTab): Promise<void> {
-  const text = serializeTab(tab);
-  const result = await fs.saveFileAs(text, tab.data.meta.filename);
+async function performSaveAs(tab: DocTab, choice: SaveAsChoice): Promise<void> {
+  const text = serializeTab(tab, choice);
+  const suggestedName = suggestFilename(tab.data.meta.filename, choice);
+  const result = await fs.saveFileAs(text, suggestedName, choice.fileType, choice.delimiter);
   if (result) {
     tab.handle = result.handle;
-    tab.data = { ...tab.data, meta: { ...tab.data.meta, filename: result.name } };
+    tab.fileType = choice.fileType;
+    tab.data = { ...tab.data, meta: { ...tab.data.meta, filename: result.name, delimiter: choice.delimiter } };
     tab.dirty = false;
     void deleteDraft(tab.id).catch((err) => console.error('draft cleanup failed', err));
     void removeRecentFile(tab.id).catch(() => {});
     updateStatus();
   } else if (!fs.supportsDirectSave) {
     // Fallback path triggers a download immediately; treat as saved.
+    tab.fileType = choice.fileType;
+    tab.data = { ...tab.data, meta: { ...tab.data.meta, filename: suggestedName, delimiter: choice.delimiter } };
     tab.dirty = false;
     updateStatus();
   }

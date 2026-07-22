@@ -5,6 +5,8 @@
  * src/core and src/ui never need to know which one is active.
  */
 
+import type { FileType } from '../types/index.ts';
+
 /** Opaque per-adapter handle — pass back to the same adapter's methods, never inspect. */
 export type FileHandle = unknown;
 
@@ -22,6 +24,13 @@ export interface FileSystemAdapter {
   /**
    * Prompts for a save location. Returns the new handle and the name the user actually chose
    * (which may differ from suggestedName) when the adapter supports direct save, else null.
+   * fileType/delimiter narrow the native picker's advertised extension to the format actually
+   * being written, rather than always offering all supported extensions together.
    */
-  saveFileAs(text: string, suggestedName: string): Promise<{ handle: FileHandle; name: string } | null>;
+  saveFileAs(
+    text: string,
+    suggestedName: string,
+    fileType: FileType,
+    delimiter: string,
+  ): Promise<{ handle: FileHandle; name: string } | null>;
 }

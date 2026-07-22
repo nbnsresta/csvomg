@@ -30,7 +30,14 @@ export default defineConfig({
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}']
       },
-      devOptions: { enabled: true }
+      // Was `enabled: true` — that registers a service worker even under `npm run dev`, which
+      // then serves whatever bundle/HTML it cached at registration time. Every rapid source
+      // change (new DOM elements, updated main.ts wiring) risks silently going stale behind it
+      // until a manual hard-refresh/unregister — this is what caused two separate "nothing
+      // happens" reports (drag-drop/tabs, then the Save As dialog) that tested fine in a clean
+      // browser. PWA/offline behavior should be verified via `npm run build && npm run preview`
+      // instead, which is the standard way to test a real production service worker anyway.
+      devOptions: { enabled: false }
     })
   ],
   build: {

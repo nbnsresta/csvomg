@@ -1,3 +1,4 @@
+import type { FileType } from '../types/index.ts';
 import type { FileHandle, FileSystemAdapter, OpenedFile } from './types.ts';
 
 const PICKER_TYPES = [
@@ -9,6 +10,19 @@ const PICKER_TYPES = [
     },
   },
 ];
+
+/** Narrows the save picker to just the format actually being written, instead of always offering
+ * all three extensions together — reduces (doesn't eliminate) the chance of a save ending up with
+ * a filename extension that doesn't match its actual content format. */
+function saveTypesFor(fileType: FileType, delimiter: string) {
+  if (fileType === 'json') {
+    return [{ description: 'JSON', accept: { 'application/json': ['.json'] } }];
+  }
+  if (delimiter === '\t') {
+    return [{ description: 'TSV', accept: { 'text/tab-separated-values': ['.tsv'] } }];
+  }
+  return [{ description: 'CSV', accept: { 'text/csv': ['.csv'] } }];
+}
 
 function supportsFileSystemAccess(): boolean {
   return typeof window !== 'undefined' && 'showOpenFilePicker' in window;
@@ -107,11 +121,16 @@ async function saveToHandle(handle: FileHandle, text: string): Promise<void> {
 }
 
 /** Prompts for a new save location (Chromium) or triggers a download (fallback). Returns the new handle and chosen name, if any. */
-async function saveFileAs(text: string, suggestedName: string): Promise<{ handle: FileHandle; name: string } | null> {
+async function saveFileAs(
+  text: string,
+  suggestedName: string,
+  fileType: FileType,
+  delimiter: string,
+): Promise<{ handle: FileHandle; name: string } | null> {
   if (supportsFileSystemAccess()) {
     let handle: FileSystemFileHandle;
     try {
-      handle = await window.showSaveFilePicker({ suggestedName, types: PICKER_TYPES });
+      handle = await window.showSaveFilePicker({ suggestedName, types: saveTypesFor(fileType, delimiter) });
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return null;
       throw err;
