@@ -65,12 +65,20 @@
           <ul id="recent-files-list"></ul>
         </div>
       </div>
+      <!-- UI-scale zoom (src/ui/zoom.ts) applies here only — not to the toolbar/tab-bar/status-bar
+           chrome above/below — so turning it up doesn't shift buttons and controls around, just
+           the data being read. See STATUS.md's "Zoom / scale slider" notes for why this is safe:
+           position: absolute; inset: 0 on a non-root zoomed element still exactly fills its real
+           (unzoomed) parent, verified empirically. -->
       <div id="grid-container" class="hidden"></div>
     </main>
     <footer id="status-bar">
       <div class="status-left" id="status-selection">Ready</div>
       <button type="button" id="status-warning" class="status-warning hidden"></button>
-      <div class="status-right" id="status-counts"></div>
+      <div class="status-right-group">
+        <div class="status-zoom" id="status-zoom"></div>
+        <div class="status-right" id="status-counts"></div>
+      </div>
     </footer>
 
     <!-- Native Dialogs -->

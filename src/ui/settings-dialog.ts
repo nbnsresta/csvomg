@@ -18,7 +18,7 @@ let themeDarkInput: HTMLInputElement;
 let themeLightInput: HTMLInputElement;
 let autoSaveInput: HTMLInputElement;
 
-let current: Settings = { theme: 'dark', autoSave: false };
+let current: Settings = { theme: 'dark', autoSave: false, uiScale: 1 };
 let onChangeCallback: (next: Settings) => void = () => {};
 
 function emitChange(patch: Partial<Settings>): void {

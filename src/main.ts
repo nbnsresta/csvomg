@@ -40,6 +40,7 @@ import { showReconnectDialog } from './ui/reconnect-dialog.ts';
 import { showSaveAsDialog, type SaveAsChoice } from './ui/save-as-dialog.ts';
 import { showSettingsDialog } from './ui/settings-dialog.ts';
 import { initToolbar } from './ui/toolbar.ts';
+import { applyZoom, initZoomControl } from './ui/zoom.ts';
 import { loadSettings, saveSettings, type Settings } from './io/settings.ts';
 import type { DataModel, Diff, FileType, Mutation, Selection, SortState } from './types/index.ts';
 import pencilIcon from './icons/pencil.svg?raw';
@@ -113,6 +114,7 @@ const MAX_TABS = 10;
 let tabs: DocTab[] = [];
 let activeTabId: string | null = null;
 let settings: Settings = loadSettings();
+applyZoom(settings.uiScale);
 
 function getActiveTab(): DocTab | null {
   return tabs.find((t) => t.id === activeTabId) ?? null;
@@ -128,13 +130,13 @@ function canOpenNewTab(): boolean {
 
 let untitledCounter = 1;
 function nextUntitledName(): string {
-  return `Untitled_${untitledCounter++}.csv`;
+  return `Untitled_${untitledCounter++}`;
 }
 
 /** Seeds the counter past any restored Untitled_N.csv tabs so a new one never collides. */
 function seedUntitledCounter(): void {
   const nums = tabs
-    .map((t) => /^Untitled_(\d+)\.csv$/.exec(t.data.meta.filename)?.[1])
+    .map((t) => /^Untitled_(\d+)$/.exec(t.data.meta.filename)?.[1])
     .filter((n): n is string => n !== undefined)
     .map(Number);
   untitledCounter = nums.length > 0 ? Math.max(...nums) + 1 : 1;
@@ -194,6 +196,13 @@ const toolbar = initToolbar({
   onSaveAs: () => void saveAs(),
   onSettings: () => showSettingsDialog(settings, handleSettingsChange),
 });
+
+function handleZoomChange(scale: number): void {
+  settings = { ...settings, uiScale: scale };
+  saveSettings(settings);
+}
+
+initZoomControl(document.getElementById('status-zoom') as HTMLDivElement, settings.uiScale, handleZoomChange);
 
 interface FindMatch {
   row: number;

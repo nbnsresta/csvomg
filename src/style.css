@@ -244,6 +244,31 @@ footer#status-bar {
   text-decoration-color: var(--warning);
 }
 
+.status-right-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.status-zoom {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.status-zoom-slider {
+  width: 70px;
+  accent-color: var(--accent);
+}
+
+.status-zoom-label {
+  min-width: 34px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+
 /* Empty State */
 #empty-state {
   display: flex;
@@ -714,7 +739,9 @@ footer#status-bar {
   display: none !important;
 }
 
-/* Grid */
+/* Grid — UI-scale zoom (src/ui/zoom.ts) is applied here via inline style, not a stylesheet rule,
+ * scoped to just this element so the toolbar/tab-bar/status-bar chrome (and the empty-state
+ * screen) stay fixed size regardless of the slider. */
 #grid-container {
   position: absolute;
   inset: 0;

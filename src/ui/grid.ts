@@ -4,6 +4,7 @@ import sortIcon from '../icons/sort.svg?raw';
 import arrowUpIcon from '../icons/arrow-up.svg?raw';
 import dotsVerticalIcon from '../icons/dots-vertical.svg?raw';
 import { createIcon } from '../utils/icons.ts';
+import { getCurrentZoom } from './zoom.ts';
 
 // Mirrors the --row-height / --header-height / --gutter-width tokens in style.css.
 const ROW_HEIGHT = 28;
@@ -692,13 +693,18 @@ export class Grid {
     const resizeCol = Number(zone.dataset.resizeCol);
     const startX = event.clientX;
     const startWidth = this.columnWidths[resizeCol] ?? COL_WIDTH;
+    // clientX deltas are always in real viewport pixels, regardless of the app's UI-scale zoom
+    // (src/ui/zoom.ts) — but startWidth/columnWidths live in "local" CSS pixels that zoom then
+    // multiplies again at render time. Without dividing by the live scale here, dragging would
+    // resize the column faster/slower than the cursor whenever zoom != 1.
+    const scale = getCurrentZoom();
     // Set before the first render so the highlight is visible immediately on mousedown, not only
     // once the first mousemove lands.
     this.resizingCol = resizeCol;
     this.renderNow();
 
     const onMove = (moveEvent: MouseEvent): void => {
-      const delta = moveEvent.clientX - startX;
+      const delta = (moveEvent.clientX - startX) / scale;
       this.columnWidths[resizeCol] = Math.max(MIN_COL_WIDTH, startWidth + delta);
       this.recomputeColOffsets();
       this.updateSizer();
