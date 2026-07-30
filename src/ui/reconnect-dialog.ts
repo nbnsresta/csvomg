@@ -36,7 +36,7 @@ export function showReconnectDialog(options: ReconnectDialogOptions): void {
   const desc = document.createElement('p');
   desc.className = 'reconnect-dialog-desc';
   desc.textContent =
-    'This needs permission to read the file again. After clicking Grant Access, check for a system permission prompt — it may open behind this window.';
+    'This needs permission to read the file again. After clicking Grant Access, check for a system permission prompt.';
   dialog.appendChild(desc);
 
   const actions = document.createElement('div');
