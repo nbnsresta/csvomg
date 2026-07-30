@@ -95,12 +95,35 @@ describe('parseJSON', () => {
     ]);
   });
 
-  it('throws on non-array JSON', () => {
-    expect(() => parseJSON('{"a":1}')).toThrow();
+  it('treats a top-level object as a one-row table', () => {
+    const { headers, rows } = parseJSON('{"a":1,"b":"x"}');
+    expect(headers).toEqual(['a', 'b']);
+    expect(rows).toEqual([['1', 'x']]);
+  });
+
+  it('flattens a top-level object the same way it flattens array records', () => {
+    const { headers, rows } = parseJSON('{"id":1,"company":{"name":"Acme"}}');
+    expect(headers).toEqual(['id', 'company.name']);
+    expect(rows).toEqual([['1', 'Acme']]);
+  });
+
+  it('throws a friendly error on a top-level primitive (number/string/bool/null)', () => {
+    expect(() => parseJSON('42')).toThrow('JSON must be an array of objects, an array of arrays, or a single object.');
+    expect(() => parseJSON('"hello"')).toThrow();
+    expect(() => parseJSON('null')).toThrow();
+  });
+
+  it('throws a friendly error on malformed JSON instead of the raw SyntaxError', () => {
+    expect(() => parseJSON('{"a":')).toThrow("This file isn't valid JSON — check for a missing bracket, quote, or trailing comma.");
   });
 
   it('returns empty table for an empty array', () => {
     expect(parseJSON('[]')).toEqual({ headers: [], rows: [], columnTypes: {} });
+  });
+
+  it('returns empty table for an empty or whitespace-only file', () => {
+    expect(parseJSON('')).toEqual({ headers: [], rows: [], columnTypes: {} });
+    expect(parseJSON('   \n  ')).toEqual({ headers: [], rows: [], columnTypes: {} });
   });
 
   it('flattens nested objects into dot-delimited keys', () => {

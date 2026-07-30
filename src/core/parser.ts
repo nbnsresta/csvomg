@@ -174,8 +174,15 @@ function inferColumnType(value: unknown): ColumnType {
 
 /**
  * Parses JSON text into a headers + rows table. Supports array-of-objects (headers = union of
- * flattened keys, first-seen order; nested objects/arrays flattened, see flattenValue) and
- * array-of-arrays (first row = headers, no flattening/type profile — there are no keys there).
+ * flattened keys, first-seen order; nested objects/arrays flattened, see flattenValue),
+ * array-of-arrays (first row = headers, no flattening/type profile — there are no keys there),
+ * and a single top-level object (treated as a one-row array-of-objects, since that's the same
+ * shape as `[obj]` once wrapped).
+ *
+ * An empty file (or one that's all whitespace) opens as an empty table, matching parseCSV's
+ * behavior for empty input, rather than throwing on `JSON.parse('')`. Genuinely malformed JSON
+ * still throws, but with a message written for someone editing a file by hand rather than a raw
+ * `SyntaxError` pass-through.
  *
  * `columnTypes` is a best-effort profile of each column's original JSON type (number/boolean vs.
  * the default text), used by serializeJSON to export it back out as the right type. Scanned from
@@ -183,9 +190,20 @@ function inferColumnType(value: unknown): ColumnType {
  * null (or a row that lacks the field) shouldn't force a numeric/boolean column to read as text.
  */
 export function parseJSON(text: string): { headers: string[]; rows: string[][]; columnTypes: Record<string, ColumnType> } {
-  const data: unknown = JSON.parse(text);
+  if (text.trim() === '') {
+    return { headers: [], rows: [], columnTypes: {} };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error("This file isn't valid JSON — check for a missing bracket, quote, or trailing comma.");
+  }
+
+  const data: unknown = parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? [parsed] : parsed;
   if (!Array.isArray(data)) {
-    throw new Error('JSON must be an array of objects or an array of arrays');
+    throw new Error('JSON must be an array of objects, an array of arrays, or a single object.');
   }
   if (data.length === 0) {
     return { headers: [], rows: [], columnTypes: {} };
