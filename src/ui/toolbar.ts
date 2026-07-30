@@ -5,6 +5,7 @@
  */
 
 import chevronDownIcon from '../icons/chevron-down.svg?raw';
+import infoCircleIcon from '../icons/info-circle.svg?raw';
 import slidersIcon from '../icons/sliders.svg?raw';
 import { createIcon } from '../utils/icons.ts';
 import { showContextMenu } from './context-menu.ts';
@@ -14,6 +15,7 @@ export interface ToolbarOptions {
   onOpen: VoidFunction;
   onSave: VoidFunction;
   onSaveAs: VoidFunction;
+  onAbout: VoidFunction;
   onSettings: VoidFunction;
 }
 
@@ -26,8 +28,10 @@ export function initToolbar(options: ToolbarOptions): ToolbarController {
   const btnOpen = document.getElementById('btn-toolbar-open') as HTMLButtonElement;
   const btnSave = document.getElementById('btn-toolbar-save') as HTMLButtonElement;
   const btnSaveMenu = document.getElementById('btn-toolbar-save-menu') as HTMLButtonElement;
+  const btnAbout = document.getElementById('btn-toolbar-about') as HTMLButtonElement;
   const btnSettings = document.getElementById('btn-toolbar-settings') as HTMLButtonElement;
   btnSaveMenu.appendChild(createIcon(chevronDownIcon));
+  btnAbout.appendChild(createIcon(infoCircleIcon));
   btnSettings.appendChild(createIcon(slidersIcon));
 
   btnNew.addEventListener('click', options.onNew);
@@ -37,6 +41,7 @@ export function initToolbar(options: ToolbarOptions): ToolbarController {
     const rect = btnSaveMenu.getBoundingClientRect();
     showContextMenu(rect.left, rect.bottom + 4, [{ label: 'Save As...', onSelect: options.onSaveAs }]);
   });
+  btnAbout.addEventListener('click', options.onAbout);
   btnSettings.addEventListener('click', options.onSettings);
 
   return {

@@ -32,6 +32,7 @@ import {
 import { clearSession, loadSession, saveSession, type SessionState } from './io/session.ts';
 import { openDroppedFile, webFileSystemAdapter } from './io/web-fs.ts';
 import type { FileHandle, OpenedFile } from './io/types.ts';
+import { showAboutDialog } from './ui/about-dialog.ts';
 import { showContextMenu, type ContextMenuItem } from './ui/context-menu.ts';
 import { showExportMismatchDialog } from './ui/export-dialog.ts';
 import { createFindBar } from './ui/find-bar.ts';
@@ -194,6 +195,7 @@ const toolbar = initToolbar({
   onOpen: () => void openFileDialog(),
   onSave: () => void save(),
   onSaveAs: () => void saveAs(),
+  onAbout: () => showAboutDialog(),
   onSettings: () => showSettingsDialog(settings, handleSettingsChange),
 });
 

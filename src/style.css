@@ -502,6 +502,62 @@ footer#status-bar {
   margin-top: 4px;
 }
 
+/* About dialog (about-dialog.ts) — same native-<dialog> shell as .settings-dialog, sized wider
+ * to comfortably hold prose paragraphs rather than a couple of form rows. */
+.about-dialog {
+  width: 100%;
+  max-width: 460px;
+  max-height: 80vh;
+  margin: auto;
+  padding: 24px;
+  background-color: var(--surface-color);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+  color: var(--text-primary);
+  overflow-y: auto;
+}
+
+.about-dialog::backdrop {
+  background-color: var(--overlay-backdrop);
+  backdrop-filter: blur(4px);
+}
+
+.about-dialog h3 {
+  margin: 0 0 16px 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.about-dialog h4 {
+  margin: 0 0 4px 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.about-dialog-section {
+  margin-bottom: 16px;
+}
+
+.about-dialog p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.about-dialog-features {
+  margin: 0 0 20px 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.about-dialog-close {
+  width: 100%;
+}
+
 /* Export-mismatch confirmation dialog (export-dialog.ts) — same native-<dialog> shell as
  * .settings-dialog, sized a little wider to comfortably fit a column-name list. */
 .export-dialog {
