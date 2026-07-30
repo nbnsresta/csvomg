@@ -61,6 +61,22 @@ const tabBar = document.getElementById('tab-bar') as HTMLElement;
 const recentFilesContainer = document.getElementById('recent-files-container') as HTMLDivElement;
 const recentFilesList = document.getElementById('recent-files-list') as HTMLUListElement;
 
+// Defensive cleanup for a bug class that's already bitten this project twice (see STATUS.md,
+// 2026-07-22): `npm run dev` used to register a real service worker (`VitePWA({ devOptions:
+// { enabled: true } })`), which then kept serving whatever it had cached to an already-open tab
+// after every later source change, until a manual hard-refresh/unregister. That's fixed going
+// forward (`devOptions.enabled: false`), but the fix can't reach backwards — a service worker
+// registered in a browser *before* that fix landed just keeps running indefinitely, silently
+// intercepting every ordinary reload of this dev origin with its old cached snapshot, forever,
+// since nothing about a later `npm run dev` restart ever tells it to go away. Unregistering it
+// unconditionally on every dev boot is cheap and can't misfire — production builds intentionally
+// keep their service worker (that's the whole point of the PWA), so this only ever runs in dev.
+if (import.meta.env.DEV && 'serviceWorker' in navigator) {
+  void navigator.serviceWorker.getRegistrations().then((regs) => {
+    for (const reg of regs) void reg.unregister();
+  });
+}
+
 // The only place a venue-specific FileSystemAdapter is chosen. Swapping venues (extension,
 // future VS Code host) means swapping this one line — nothing below here should import
 // web-fs.ts or DOM file-picker types directly.
