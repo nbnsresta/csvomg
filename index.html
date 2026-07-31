@@ -3,11 +3,66 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16.png" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#131620" />
-    
-    <title>csvomg</title>
-    
+
+    <title>csvomg — Free Browser-Based CSV &amp; JSON Editor</title>
+    <meta name="description" content="Free browser-based CSV &amp; JSON editor. Open, edit, and save files directly on your computer — no uploads, no accounts, and nothing ever leaves your browser." />
+    <link rel="canonical" href="https://csvomg.com/" />
+
+    <!-- Open Graph / Twitter Card — shown when a search engine or social platform first crawls
+         the URL and needs a title/description/preview image to show for it. og-image.png is a
+         static 1200x630 branded card (public/og-image.png), not a live app screenshot, so it
+         always renders cleanly regardless of what a real user happened to have open. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://csvomg.com/" />
+    <meta property="og:site_name" content="csvomg" />
+    <meta property="og:title" content="csvomg — Free Browser-Based CSV &amp; JSON Editor" />
+    <meta property="og:description" content="Open, edit, and save CSV, TSV, and JSON files directly on your computer using the File System Access API. No uploads, no accounts, no data transmission — everything happens locally in your browser." />
+    <meta property="og:image" content="https://csvomg.com/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="csvomg — Free Browser-Based CSV &amp; JSON Editor" />
+    <meta name="twitter:description" content="Open, edit, and save CSV, TSV, and JSON files directly on your computer — no uploads, no accounts, no data transmission." />
+    <meta name="twitter:image" content="https://csvomg.com/og-image.png" />
+
+    <!-- Structured data (schema.org, via Google's recommended JSON-LD format) — tells a crawler
+         exactly what kind of thing this page is (a free, browser-based software application) and
+         what it does, beyond what plain meta tags can express. See STATUS.md's "SEO basics" note
+         for why SoftwareApplication/BrowserApplication was chosen over a plain WebSite type. -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "csvomg",
+        "url": "https://csvomg.com/",
+        "description": "A free, browser-based CSV and JSON editor that reads and writes files directly on your computer via the File System Access API. No uploads, no accounts, no data transmission — everything happens locally in the browser.",
+        "applicationCategory": "BrowserApplication",
+        "operatingSystem": "Any (runs in a modern web browser)",
+        "browserRequirements": "Requires a browser with File System Access API support, e.g. Chrome or Edge",
+        "image": "https://csvomg.com/og-image.png",
+        "screenshot": "https://csvomg.com/og-image.png",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        },
+        "featureList": [
+          "Open and edit CSV, TSV, and JSON files, including converting between them on save",
+          "Direct local file read/write with no upload or download round-trip",
+          "Work on several files at once, each in its own tab",
+          "Undo/redo, find & replace, sort, and fill selections",
+          "Drag to reorder rows and columns",
+          "Optional auto-save straight back to the linked file",
+          "Installable as an offline-capable app"
+        ]
+      }
+    </script>
+
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

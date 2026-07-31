@@ -28,7 +28,11 @@ export default defineConfig({
         ]
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,svg,png,woff2}']
+        globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
+        // og-image.png (public/, used by <meta property="og:image">) is only ever fetched by
+        // search engines and social-media unfurlers, never by the app itself in a real user's
+        // browser — precaching its ~160KB into every install would be pure waste.
+        globIgnores: ['og-image.png']
       },
       // Was `enabled: true` — that registers a service worker even under `npm run dev`, which
       // then serves whatever bundle/HTML it cached at registration time. Every rapid source

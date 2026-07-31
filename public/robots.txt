@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://csvomg.com/sitemap.xml
