@@ -37,6 +37,7 @@ import { showContextMenu, type ContextMenuItem } from './ui/context-menu.ts';
 import { showExportMismatchDialog } from './ui/export-dialog.ts';
 import { createFindBar } from './ui/find-bar.ts';
 import { Grid, type CellEdit, type ContextMenuTarget } from './ui/grid.ts';
+import { showAlertDialog, showConfirmDialog, showPromptDialog } from './ui/modal.ts';
 import { showReconnectDialog } from './ui/reconnect-dialog.ts';
 import { showSaveAsDialog, type SaveAsChoice } from './ui/save-as-dialog.ts';
 import { showSettingsDialog } from './ui/settings-dialog.ts';
@@ -139,7 +140,7 @@ function getActiveTab(): DocTab | null {
 
 function canOpenNewTab(): boolean {
   if (tabs.length >= MAX_TABS) {
-    alert(`You have ${MAX_TABS} documents open — close one before opening another.`);
+    void showAlertDialog(`You have ${MAX_TABS} documents open — close one before opening another.`);
     return false;
   }
   return true;
@@ -540,7 +541,7 @@ async function reopenRecentFile(entry: RecentFileEntry): Promise<void> {
   if (entry.kind === 'draft') {
     const draft = await loadDraft(entry.id).catch(() => null);
     if (!draft) {
-      alert(`"${entry.filename}" is no longer available.`);
+      await showAlertDialog(`"${entry.filename}" is no longer available.`);
       await removeRecentFile(entry.id).catch(() => {});
       await refreshRecentFilesUI();
       return;
@@ -686,7 +687,7 @@ function reconnectTab(id: string): void {
 }
 // --- end reconnectTab() ---
 
-function closeTab(id: string): void {
+async function closeTab(id: string): Promise<void> {
   const tab = tabs.find((t) => t.id === id);
   if (!tab) return;
   // Unconditional, before the discard confirmation below — a lingering timer firing after the
@@ -697,7 +698,13 @@ function closeTab(id: string): void {
   // never-edited handle-less tab (e.g. a fallback-mode dropped/opened file, dirty: false) can
   // have real content too, but wasn't dirty, so it never hit the dialog at all.
   const confirmedDiscard = tab.dirty && hasContent(tab.data);
-  if (confirmedDiscard && !confirm(`Discard unsaved changes to "${tab.data.meta.filename}"?`)) {
+  if (
+    confirmedDiscard &&
+    !(await showConfirmDialog(`Discard unsaved changes to "${tab.data.meta.filename}"?`, {
+      confirmLabel: 'Discard',
+      danger: true,
+    }))
+  ) {
     return;
   }
 
@@ -787,7 +794,7 @@ function renderTabs(): void {
       closeBtn.setAttribute('aria-label', `Close ${tab.data.meta.filename}`);
       closeBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        closeTab(tab.id);
+        void closeTab(tab.id);
       });
       el.appendChild(closeBtn);
 
@@ -799,14 +806,14 @@ function renderTabs(): void {
 function loadFile(opened: OpenedFile): void {
   if (!canOpenNewTab()) return;
   if (!isSupportedFile(opened.name)) {
-    alert(`"${opened.name}" isn't a supported file type. csvomg opens .csv, .tsv, and .json files.`);
+    void showAlertDialog(`"${opened.name}" isn't a supported file type. csvomg opens .csv, .tsv, and .json files.`);
     return;
   }
   let parsed: { data: DataModel; type: FileType };
   try {
     parsed = parseOpenedFile(opened);
   } catch (err) {
-    alert(`Failed to open "${opened.name}": ${err instanceof Error ? err.message : String(err)}`);
+    void showAlertDialog(`Failed to open "${opened.name}": ${err instanceof Error ? err.message : String(err)}`);
     return;
   }
   const tab: DocTab = {
@@ -1126,8 +1133,8 @@ function buildColumnActionItems(data: DataModel, col: number): ContextMenuItem[]
     {
       label: 'Rename column',
       icon: pencilIcon,
-      onSelect: () => {
-        const name = prompt('Column name', data.headers[col]);
+      onSelect: async () => {
+        const name = await showPromptDialog('Column name', data.headers[col]);
         if (name === null) return;
         commit(renameColumn(data, col, name));
       },
@@ -1159,8 +1166,8 @@ function buildColumnActionItems(data: DataModel, col: number): ContextMenuItem[]
       label: 'Delete column',
       icon: trashIcon,
       danger: true,
-      onSelect: () => {
-        if (!confirm(`Delete column "${headerName}"?`)) return;
+      onSelect: async () => {
+        if (!(await showConfirmDialog(`Delete column "${headerName}"?`, { confirmLabel: 'Delete', danger: true }))) return;
         commit(deleteColumn(data, col));
       },
     },
@@ -1189,8 +1196,8 @@ function handleContextMenu(target: ContextMenuTarget): void {
       {
         label: 'Delete row',
         danger: true,
-        onSelect: () => {
-          if (!confirm(`Delete row ${target.row + 1}?`)) return;
+        onSelect: async () => {
+          if (!(await showConfirmDialog(`Delete row ${target.row + 1}?`, { confirmLabel: 'Delete', danger: true }))) return;
           commit(deleteRow(data, realRow));
         },
       },
@@ -1384,7 +1391,7 @@ window.addEventListener('drop', (e) => {
       if (opened) loadFile(opened);
     })
     .catch((err) => {
-      alert(`Failed to open dropped file: ${err instanceof Error ? err.message : String(err)}`);
+      void showAlertDialog(`Failed to open dropped file: ${err instanceof Error ? err.message : String(err)}`);
     });
 });
 

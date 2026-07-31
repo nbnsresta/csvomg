@@ -558,6 +558,51 @@ footer#status-bar {
   width: 100%;
 }
 
+/* Shared alert()/confirm()/prompt() replacement dialog (modal.ts) — same native-<dialog> shell
+ * as .settings-dialog, narrower, since a one-line message plus one or two buttons never needs
+ * .settings-dialog's 380px. */
+.modal-dialog {
+  width: 100%;
+  max-width: 340px;
+  margin: auto;
+  padding: 20px;
+  background-color: var(--surface-color);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+  color: var(--text-primary);
+}
+
+.modal-dialog::backdrop {
+  background-color: var(--overlay-backdrop);
+  backdrop-filter: blur(4px);
+}
+
+.modal-dialog p {
+  margin: 0 0 16px 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.modal-dialog-input {
+  width: 100%;
+  box-sizing: border-box;
+  background-color: var(--surface-hover);
+  color: var(--text-primary);
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 13px;
+  margin: 0 0 16px 0;
+}
+
+.modal-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 /* Export-mismatch confirmation dialog (export-dialog.ts) — same native-<dialog> shell as
  * .settings-dialog, sized a little wider to comfortably fit a column-name list. */
 .export-dialog {
@@ -675,6 +720,16 @@ footer#status-bar {
 }
 .btn-secondary:hover {
   background-color: var(--border-color);
+}
+
+/* Destructive-action variant — same red as the context menu's "Delete row"/"Delete column"
+ * items (.context-menu-item.danger, var(--danger)), used by showConfirmDialog's danger option. */
+.btn-danger {
+  background-color: var(--danger);
+  color: #fff;
+}
+.btn-danger:hover {
+  opacity: 0.85;
 }
 
 /* Compound Save button — main action + a narrow arrow segment that opens a menu (Save As).
