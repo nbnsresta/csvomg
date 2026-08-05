@@ -62,13 +62,6 @@ function buildDialog(): HTMLDialogElement {
   });
   el.appendChild(list);
 
-  const closeBtn = document.createElement('button');
-  closeBtn.type = 'button';
-  closeBtn.className = 'btn btn-primary about-dialog-close';
-  closeBtn.textContent = 'Got it';
-  closeBtn.addEventListener('click', () => el.close());
-  el.appendChild(closeBtn);
-
   // Same "outside the dialog's own content box" backdrop-click-to-close as settings-dialog.ts —
   // native <dialog> only closes on Escape by default.
   el.addEventListener('click', (event) => {

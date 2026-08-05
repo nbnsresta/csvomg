@@ -23,8 +23,11 @@ no uploads, no accounts, and nothing ever leaves your browser.
 - **No multi-sheet workbooks** — one flat table per document; multiple documents are separate
   tabs, not sheets within one file
 
-See [`STATUS.md`](./STATUS.md) for the full implementation log, architecture notes, and open
-ideas.
+## How it's built
+
+This is a vibe-coded project — the vast majority of the code was written by an AI coding agent
+(Claude) from conversational prompts, with a human steering, reviewing, and testing rather than
+hand-writing most of the implementation.
 
 ## Development
 
