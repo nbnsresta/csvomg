@@ -524,8 +524,8 @@ footer#status-bar {
 }
 
 .about-dialog h3 {
-  margin: 0 0 16px 0;
-  font-size: 15px;
+  margin: 0 0 12px 0;
+  font-size: 20px;
   font-weight: 600;
 }
 
@@ -554,8 +554,24 @@ footer#status-bar {
   line-height: 1.6;
 }
 
-.about-dialog-close {
-  width: 100%;
+.about-dialog-github {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  margin-bottom: 20px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+
+.about-dialog-github:hover {
+  color: var(--text-primary);
+}
+
+.about-dialog-github svg {
+  width: 16px;
+  height: 16px;
 }
 
 /* Shared alert()/confirm()/prompt() replacement dialog (modal.ts) — same native-<dialog> shell

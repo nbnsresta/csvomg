@@ -1,9 +1,13 @@
 /**
  * Fills the empty <dialog id="dialog-about"> scaffold — a plain-language explainer for what makes
  * csvomg different from a typical upload-a-file web tool, plus a quick tour of what it can do.
+ * Leads with the GitHub link and substantive content rather than a marketing-style heading.
  * Same native <dialog> pattern as settings-dialog.ts/export-dialog.ts (built once, no state to
- * sync between calls since there's nothing to configure here — just a Close button).
+ * sync between calls since there's nothing to configure here — closes via backdrop click or Escape).
  */
+
+import githubIcon from '../icons/github.svg?raw';
+import { createIcon } from '../utils/icons.ts';
 
 let dialog: HTMLDialogElement | null = null;
 
@@ -23,8 +27,16 @@ function buildDialog(): HTMLDialogElement {
   el.className = 'about-dialog';
 
   const title = document.createElement('h3');
-  title.textContent = 'What makes csvomg different';
+  title.textContent = 'About csvomg';
   el.appendChild(title);
+
+  const githubLink = document.createElement('a');
+  githubLink.className = 'about-dialog-github';
+  githubLink.href = 'https://github.com/nbnsresta/csvomg';
+  githubLink.target = '_blank';
+  githubLink.rel = 'noopener noreferrer';
+  githubLink.append(createIcon(githubIcon), document.createTextNode('View source on GitHub'));
+  el.appendChild(githubLink);
 
   el.append(
     section(
@@ -78,11 +90,4 @@ export function showAboutDialog(): void {
   if (!dialog) dialog = buildDialog();
   if (dialog.open) return;
   dialog.showModal();
-  // The "Got it" button is the dialog's only focusable descendant, so showModal()'s own
-  // autofocus step lands there — and since it sits below the fold in this scrollable dialog, the
-  // browser scrolls straight to the bottom, hiding the title and opening section. Reset scroll
-  // position on the next frame, after that autofocus-driven scroll has already happened.
-  requestAnimationFrame(() => {
-    dialog!.scrollTop = 0;
-  });
 }
