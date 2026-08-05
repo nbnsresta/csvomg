@@ -52,6 +52,7 @@ Opens the dev server (Vite) with hot module reload.
 | `npm run typecheck`   | `tsc --noEmit`                                       |
 | `npm run lint`        | Lint `src/` with oxlint                              |
 | `npm run deploy`      | Build and deploy to Cloudflare Pages via Wrangler    |
+| `npm run build:gh-pages` | Production build with base path `/csvomg/`, for GitHub Pages |
 
 ### Stack
 
