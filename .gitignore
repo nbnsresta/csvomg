@@ -13,6 +13,9 @@ dist-ssr
 dev-dist
 *.local
 
+# Local-only status/notes doc
+STATUS.md
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
